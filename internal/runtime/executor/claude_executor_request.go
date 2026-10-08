@@ -287,6 +287,11 @@ func isClaudeHaikuModel(model string) bool {
 	return strings.Contains(strings.ToLower(model), "haiku")
 }
 
+func isClaudeHaiku55Model(model string) bool {
+	model = claudeCanonicalModel(model)
+	return model == "claude-haiku-5-5" || strings.HasPrefix(model, "claude-haiku-5-5-") || strings.HasPrefix(model, "claude-haiku-5-5[")
+}
+
 func claudeCanonicalModel(model string) string {
 	model = strings.ToLower(strings.TrimSpace(model))
 	if slash := strings.LastIndexByte(model, '/'); slash >= 0 {
@@ -419,7 +424,8 @@ func claudeRequestSupportsEffort(body []byte, requested map[string]bool) bool {
 			return false
 		}
 		model := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
-		if isClaudeHaikuModel(model) {
+		// Haiku 4.5 and older reject effort; Haiku 5.5 supports it.
+		if isClaudeHaikuModel(model) && !isClaudeHaiku55Model(model) {
 			return false
 		}
 		thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
