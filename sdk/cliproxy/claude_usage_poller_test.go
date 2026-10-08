@@ -3,6 +3,7 @@ package cliproxy
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -50,5 +51,39 @@ func TestResetFirstRoutingSelector(t *testing.T) {
 	}
 	if _, ok := newRoutingSelector(state).(*coreauth.ResetFirstSelector); !ok {
 		t.Fatalf("selector type = %T, want *auth.ResetFirstSelector", newRoutingSelector(state))
+	}
+}
+
+func TestShouldPollClaudeUsage(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	claudeAuth := func(observedAt time.Time) *coreauth.Auth {
+		return &coreauth.Auth{
+			ID:         "claude-a.json",
+			Provider:   "claude",
+			Status:     coreauth.StatusActive,
+			Attributes: map[string]string{coreauth.AttributeAuthKind: coreauth.AuthKindOAuth},
+			Metadata:   map[string]any{"access_token": "token"},
+			Quota:      coreauth.QuotaState{ObservedAt: observedAt},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		auth    *coreauth.Auth
+		retryAt time.Time
+		want    bool
+	}{
+		{"never observed", claudeAuth(time.Time{}), time.Time{}, true},
+		{"fresh from traffic", claudeAuth(now.Add(-5 * time.Minute)), time.Time{}, false},
+		{"stale snapshot", claudeAuth(now.Add(-claudeUsageFreshFor)), time.Time{}, true},
+		{"backing off after failure", claudeAuth(time.Time{}), now.Add(time.Minute), false},
+		{"backoff elapsed", claudeAuth(time.Time{}), now.Add(-time.Second), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPollClaudeUsage(tt.auth, now, tt.retryAt); got != tt.want {
+				t.Fatalf("shouldPollClaudeUsage() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
