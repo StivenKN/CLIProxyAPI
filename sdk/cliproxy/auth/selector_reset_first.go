@@ -13,12 +13,14 @@ import (
 
 // ResetFirstSelector spends the credential whose 5-hour window resets soonest,
 // so quota that is about to reset gets used instead of expiring unused. When
-// that window is exhausted it moves to the next soonest reset. Credentials with
-// no active window come next, and exhausted ones last.
+// that window is exhausted it moves to the next soonest reset. Team plans are
+// spent before personal plans, credentials with no active window come after
+// those with one, and exhausted credentials come last.
 //
-// It reads Claude's unified rate-limit watermarks from Auth.Quota.Signals,
-// which response headers and the Claude usage poller keep current. Credentials
-// without signals keep a deterministic ID order, like fill-first.
+// It reads Claude's unified rate-limit watermarks and Codex's primary/secondary
+// watermarks from Auth.Quota.Signals, which response headers, the Claude usage
+// poller, and window priming keep current. Credentials without signals keep a
+// deterministic ID order, like fill-first.
 type ResetFirstSelector struct {
 	// now is overridable in tests.
 	now func() time.Time
@@ -31,6 +33,11 @@ const (
 	claudeSignal7dUtilization = "Anthropic-Ratelimit-Unified-7d-Utilization"
 	claudeSignal7dReset       = "Anthropic-Ratelimit-Unified-7d-Reset"
 	claudeSignal7dStatus      = "Anthropic-Ratelimit-Unified-7d-Status"
+
+	// Codex reports its 5-hour window as "primary" and its weekly window as
+	// "secondary": X-Codex-Primary-Used-Percent, X-Codex-Primary-Reset-At, ...
+	codexSignalPrimary   = "X-Codex-Primary-"
+	codexSignalSecondary = "X-Codex-Secondary-"
 )
 
 // Ranks order credentials before their reset times are compared.
@@ -58,6 +65,7 @@ func (w quotaWindow) exhausted(now time.Time) bool {
 type resetCandidate struct {
 	auth     *Auth
 	rank     int
+	personal bool
 	resetAt  time.Time
 	weeklyAt time.Time
 }
@@ -79,6 +87,13 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
+		aExhausted, bExhausted := a.rank == resetRankExhausted, b.rank == resetRankExhausted
+		if aExhausted != bExhausted {
+			return bExhausted
+		}
+		if a.personal != b.personal {
+			return b.personal
+		}
 		if a.rank != b.rank {
 			return a.rank < b.rank
 		}
@@ -94,9 +109,8 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 }
 
 func rankForReset(auth *Auth, now time.Time) resetCandidate {
-	fiveHour := parseQuotaWindow(auth.Quota.Signals, claudeSignal5hUtilization, claudeSignal5hReset, claudeSignal5hStatus)
-	weekly := parseQuotaWindow(auth.Quota.Signals, claudeSignal7dUtilization, claudeSignal7dReset, claudeSignal7dStatus)
-	candidate := resetCandidate{auth: auth}
+	fiveHour, weekly := quotaWindows(auth)
+	candidate := resetCandidate{auth: auth, personal: !isTeamPlan(auth)}
 	if weekly.active(now) {
 		candidate.weeklyAt = weekly.resetAt
 	}
@@ -114,6 +128,48 @@ func rankForReset(auth *Auth, now time.Time) resetCandidate {
 		candidate.rank = resetRankIdle
 	}
 	return candidate
+}
+
+// QuotaWindowIdle reports whether a credential's 5-hour window has not started
+// (or shows no usage yet) while its weekly window still has room, so a small
+// request would start the 5-hour clock.
+func QuotaWindowIdle(auth *Auth, now time.Time) bool {
+	if auth == nil {
+		return false
+	}
+	fiveHour, weekly := quotaWindows(auth)
+	if weekly.exhausted(now) {
+		return false
+	}
+	return !fiveHour.active(now) || fiveHour.utilization == 0
+}
+
+// quotaWindows reads a credential's 5-hour and weekly windows from its quota signals.
+func quotaWindows(auth *Auth) (fiveHour, weekly quotaWindow) {
+	signals := auth.Quota.Signals
+	if strings.EqualFold(auth.Provider, "codex") {
+		observedAt := auth.Quota.ObservedAt
+		return parseCodexQuotaWindow(signals, codexSignalPrimary, observedAt),
+			parseCodexQuotaWindow(signals, codexSignalSecondary, observedAt)
+	}
+	return parseQuotaWindow(signals, claudeSignal5hUtilization, claudeSignal5hReset, claudeSignal5hStatus),
+		parseQuotaWindow(signals, claudeSignal7dUtilization, claudeSignal7dReset, claudeSignal7dStatus)
+}
+
+// isTeamPlan reports a workspace plan (Claude Team/Enterprise, ChatGPT
+// Team/Business/Enterprise/Edu), whose quota is spent before personal plans.
+// Claude stores the plan from its OAuth profile, Codex from its ID token.
+func isTeamPlan(auth *Auth) bool {
+	plan := strings.TrimSpace(auth.Attributes["plan_type"])
+	if plan == "" {
+		plan, _ = auth.Metadata["plan_type"].(string)
+	}
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "team", "business", "enterprise", "edu", "education":
+		return true
+	default:
+		return false
+	}
 }
 
 // earlierKnown orders known times ascending and unknown (zero) times last.
@@ -143,6 +199,30 @@ func parseQuotaWindow(signals map[string]string, utilizationKey, resetKey, statu
 		}
 	}
 	window.rejected = strings.EqualFold(strings.TrimSpace(signals[statusKey]), "rejected")
+	return window
+}
+
+// parseCodexQuotaWindow reads one Codex window. Used percent is 0-100, and the
+// reset is either an absolute Unix time or seconds after the observation.
+func parseCodexQuotaWindow(signals map[string]string, prefix string, observedAt time.Time) quotaWindow {
+	var window quotaWindow
+	if len(signals) == 0 {
+		return window
+	}
+	if raw := strings.TrimSpace(signals[prefix+"Used-Percent"]); raw != "" {
+		if value, errParse := strconv.ParseFloat(raw, 64); errParse == nil {
+			window.utilization = value / 100
+		}
+	}
+	if raw := strings.TrimSpace(signals[prefix+"Reset-At"]); raw != "" {
+		if seconds, errParse := strconv.ParseInt(raw, 10, 64); errParse == nil && seconds > 0 {
+			window.resetAt = time.Unix(seconds, 0)
+		}
+	} else if raw := strings.TrimSpace(signals[prefix+"Reset-After-Seconds"]); raw != "" && !observedAt.IsZero() {
+		if seconds, errParse := strconv.ParseInt(raw, 10, 64); errParse == nil && seconds > 0 {
+			window.resetAt = observedAt.Add(time.Duration(seconds) * time.Second)
+		}
+	}
 	return window
 }
 

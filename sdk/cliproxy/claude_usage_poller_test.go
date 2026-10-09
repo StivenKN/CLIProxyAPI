@@ -87,3 +87,39 @@ func TestShouldPollClaudeUsage(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldPrimeQuotaWindow(t *testing.T) {
+	now := time.Now()
+	oauth := func(provider string) *coreauth.Auth {
+		return &coreauth.Auth{
+			ID: provider, Provider: provider, Status: coreauth.StatusActive,
+			Metadata: map[string]any{"access_token": "token"},
+		}
+	}
+	cooling := oauth("claude")
+	cooling.Unavailable = true
+	cooling.NextRetryAfter = now.Add(time.Minute)
+	disabled := oauth("codex")
+	disabled.Disabled = true
+
+	tests := []struct {
+		name      string
+		auth      *coreauth.Auth
+		holdUntil time.Time
+		want      bool
+	}{
+		{"idle claude", oauth("claude"), time.Time{}, true},
+		{"idle codex", oauth("codex"), time.Time{}, true},
+		{"unsupported provider", oauth("gemini"), time.Time{}, false},
+		{"held after prime", oauth("claude"), now.Add(time.Hour), false},
+		{"cooling down", cooling, time.Time{}, false},
+		{"disabled", disabled, time.Time{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPrimeQuotaWindow(tt.auth, now, tt.holdUntil); got != tt.want {
+				t.Fatalf("shouldPrimeQuotaWindow() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

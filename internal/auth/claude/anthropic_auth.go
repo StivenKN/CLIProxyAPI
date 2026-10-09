@@ -165,7 +165,19 @@ type OAuthProfile struct {
 	Organization struct {
 		UUID string `json:"uuid"`
 		Name string `json:"name"`
+		// OrganizationType is the subscription plan, e.g. "claude_team" or "claude_max".
+		OrganizationType string `json:"organization_type"`
 	} `json:"organization"`
+}
+
+// PlanType normalizes the profile's organization type into the plan_type
+// metadata value shared with Codex credentials ("claude_team" -> "team").
+func (p *OAuthProfile) PlanType() string {
+	if p == nil {
+		return ""
+	}
+	plan := strings.ToLower(strings.TrimSpace(p.Organization.OrganizationType))
+	return strings.TrimPrefix(plan, "claude_")
 }
 
 // ClaudeAuth handles Anthropic OAuth2 authentication flow.
@@ -464,6 +476,7 @@ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state stri
 		if value := strings.TrimSpace(profile.Organization.Name); value != "" {
 			tokenData.OrganizationName = value
 		}
+		tokenData.PlanType = profile.PlanType()
 	}
 
 	// Create auth bundle.
@@ -597,6 +610,7 @@ func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken
 	tokenData.AccountUUID = profile.Account.UUID
 	tokenData.OrganizationUUID = profile.Organization.UUID
 	tokenData.OrganizationName = profile.Organization.Name
+	tokenData.PlanType = profile.PlanType()
 	return tokenData, nil
 }
 
@@ -618,6 +632,7 @@ func (o *ClaudeAuth) CreateTokenStorage(bundle *ClaudeAuthBundle) *ClaudeTokenSt
 		AccountUUID:      bundle.TokenData.AccountUUID,
 		OrganizationUUID: bundle.TokenData.OrganizationUUID,
 		OrganizationName: bundle.TokenData.OrganizationName,
+		PlanType:         bundle.TokenData.PlanType,
 		DeviceIDs:        append([]string(nil), bundle.DeviceIDs...),
 		Expire:           bundle.TokenData.Expire,
 	}
@@ -687,6 +702,9 @@ func (o *ClaudeAuth) UpdateTokenStorage(storage *ClaudeTokenStorage, tokenData *
 	}
 	if tokenData.OrganizationName != "" {
 		storage.OrganizationName = tokenData.OrganizationName
+	}
+	if tokenData.PlanType != "" {
+		storage.PlanType = tokenData.PlanType
 	}
 	storage.Expire = tokenData.Expire
 }

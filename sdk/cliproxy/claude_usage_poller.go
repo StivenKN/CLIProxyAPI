@@ -47,13 +47,15 @@ type claudeUsageResponse struct {
 // runClaudeUsagePoller keeps the reset-first routing strategy informed. While
 // that strategy is active it polls the usage of Claude OAuth credentials with
 // stale quota data, so credentials that have not served a request since
-// startup still rank by their real reset times.
+// startup still rank by their real reset times. It then primes idle 5-hour
+// windows of Claude and Codex credentials (see primeQuotaWindows).
 func (s *Service) runClaudeUsagePoller(ctx context.Context) {
 	timer := time.NewTimer(claudeUsageFirstPoll)
 	defer timer.Stop()
-	// retryAt holds per-credential backoff after a failed poll. Only this
-	// goroutine touches it.
+	// retryAt holds per-credential backoff after a failed poll, and primedUntil
+	// the hold after a prime. Only this goroutine touches them.
 	retryAt := make(map[string]time.Time)
+	primedUntil := make(map[string]time.Time)
 	for {
 		select {
 		case <-ctx.Done():
@@ -61,6 +63,7 @@ func (s *Service) runClaudeUsagePoller(ctx context.Context) {
 		case <-timer.C:
 			if s.resetFirstRoutingActive() {
 				s.pollClaudeUsage(ctx, retryAt)
+				s.primeQuotaWindows(ctx, primedUntil)
 			}
 			timer.Reset(claudeUsagePollInterval)
 		}

@@ -90,3 +90,101 @@ func TestResetFirstSelectorWeeklyResetBreaksTies(t *testing.T) {
 		t.Fatalf("Pick() = %s, want the credential with a weekly reset", got.ID)
 	}
 }
+
+func TestResetFirstSelectorTeamPlansFirst(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &ResetFirstSelector{now: func() time.Time { return now }}
+	withPlan := func(auth *Auth, plan string) *Auth {
+		auth.Metadata = map[string]any{"plan_type": plan}
+		return auth
+	}
+
+	personalSoon := withPlan(resetFirstAuth("a-personal", claudeWindowSignals("5h", 0.2, now.Add(time.Hour))), "max")
+	teamLater := withPlan(resetFirstAuth("b-team-later", claudeWindowSignals("5h", 0.2, now.Add(4*time.Hour))), "team")
+	teamSoon := withPlan(resetFirstAuth("c-team-soon", claudeWindowSignals("5h", 0.2, now.Add(2*time.Hour))), "team")
+	teamIdle := withPlan(resetFirstAuth("d-team-idle", nil), "team")
+	teamExhausted := withPlan(resetFirstAuth("e-team-exhausted", claudeWindowSignals("5h", 1, now.Add(time.Hour))), "team")
+
+	tests := []struct {
+		name  string
+		auths []*Auth
+		want  string
+	}{
+		{"team beats personal with sooner reset", []*Auth{personalSoon, teamLater}, "b-team-later"},
+		{"soonest team reset wins", []*Auth{personalSoon, teamLater, teamSoon}, "c-team-soon"},
+		{"idle team beats active personal", []*Auth{personalSoon, teamIdle}, "d-team-idle"},
+		{"exhausted team goes after personal", []*Auth{teamExhausted, personalSoon}, "a-personal"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, tt.auths)
+			if err != nil {
+				t.Fatalf("Pick() error = %v", err)
+			}
+			if got.ID != tt.want {
+				t.Fatalf("Pick() = %s, want %s", got.ID, tt.want)
+			}
+		})
+	}
+}
+
+func TestResetFirstSelectorReadsCodexWindows(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &ResetFirstSelector{now: func() time.Time { return now }}
+	codexAuth := func(id, plan string, signals map[string]string) *Auth {
+		return &Auth{
+			ID: id, Provider: "codex", Status: StatusActive,
+			Attributes: map[string]string{"plan_type": plan},
+			Quota:      QuotaState{Signals: signals, ObservedAt: now},
+		}
+	}
+
+	// Absolute and relative reset forms both count.
+	soon := codexAuth("b-soon", "pro", map[string]string{
+		"X-Codex-Primary-Used-Percent":        "40",
+		"X-Codex-Primary-Reset-After-Seconds": "600",
+	})
+	later := codexAuth("a-later", "pro", map[string]string{
+		"X-Codex-Primary-Used-Percent": "40",
+		"X-Codex-Primary-Reset-At":     strconv.FormatInt(now.Add(3*time.Hour).Unix(), 10),
+	})
+	weeklyExhausted := codexAuth("0-weekly-exhausted", "team", map[string]string{
+		"X-Codex-Primary-Used-Percent":   "10",
+		"X-Codex-Primary-Reset-At":       strconv.FormatInt(now.Add(time.Minute).Unix(), 10),
+		"X-Codex-Secondary-Used-Percent": "100",
+		"X-Codex-Secondary-Reset-At":     strconv.FormatInt(now.Add(48*time.Hour).Unix(), 10),
+	})
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{weeklyExhausted, later, soon})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != "b-soon" {
+		t.Fatalf("Pick() = %s, want b-soon", got.ID)
+	}
+}
+
+func TestQuotaWindowIdle(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	tests := []struct {
+		name    string
+		signals map[string]string
+		want    bool
+	}{
+		{"no data", nil, true},
+		{"expired window", claudeWindowSignals("5h", 0.5, now.Add(-time.Minute)), true},
+		{"started window with no usage", claudeWindowSignals("5h", 0, now.Add(time.Hour)), true},
+		{"active window", claudeWindowSignals("5h", 0.01, now.Add(time.Hour)), false},
+		{"weekly exhausted", mergeSignals(
+			claudeWindowSignals("5h", 0, now.Add(-time.Hour)),
+			claudeWindowSignals("7d", 1, now.Add(24*time.Hour)),
+		), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := QuotaWindowIdle(resetFirstAuth("a", tt.signals), now); got != tt.want {
+				t.Fatalf("QuotaWindowIdle() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

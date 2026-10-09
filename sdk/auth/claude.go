@@ -213,6 +213,9 @@ waitForCallback:
 	if tokenStorage.OrganizationName != "" {
 		metadata["organization_name"] = tokenStorage.OrganizationName
 	}
+	if tokenStorage.PlanType != "" {
+		metadata["plan_type"] = tokenStorage.PlanType
+	}
 	if len(tokenStorage.DeviceIDs) > 0 {
 		metadata[claude.ClaudeDeviceIDsMetadataKey] = append([]string(nil), tokenStorage.DeviceIDs...)
 	}
