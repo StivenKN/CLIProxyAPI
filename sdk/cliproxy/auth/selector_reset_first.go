@@ -13,9 +13,8 @@ import (
 
 // ResetFirstSelector spends the credential whose 5-hour window resets soonest,
 // so quota that is about to reset gets used instead of expiring unused. When
-// that window is exhausted it moves to the next soonest reset. Team plans are
-// spent before personal plans, credentials with no active window come after
-// those with one, and exhausted credentials come last.
+// that window is exhausted it moves to the next soonest reset. Credentials with
+// no active window come next, and exhausted ones last.
 //
 // It reads Claude's unified rate-limit watermarks and Codex's primary/secondary
 // watermarks from Auth.Quota.Signals, which response headers, the Claude usage
@@ -65,7 +64,6 @@ func (w quotaWindow) exhausted(now time.Time) bool {
 type resetCandidate struct {
 	auth     *Auth
 	rank     int
-	personal bool
 	resetAt  time.Time
 	weeklyAt time.Time
 }
@@ -87,13 +85,6 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-		aExhausted, bExhausted := a.rank == resetRankExhausted, b.rank == resetRankExhausted
-		if aExhausted != bExhausted {
-			return bExhausted
-		}
-		if a.personal != b.personal {
-			return b.personal
-		}
 		if a.rank != b.rank {
 			return a.rank < b.rank
 		}
@@ -110,7 +101,7 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 
 func rankForReset(auth *Auth, now time.Time) resetCandidate {
 	fiveHour, weekly := quotaWindows(auth)
-	candidate := resetCandidate{auth: auth, personal: !isTeamPlan(auth)}
+	candidate := resetCandidate{auth: auth}
 	if weekly.active(now) {
 		candidate.weeklyAt = weekly.resetAt
 	}
@@ -154,22 +145,6 @@ func quotaWindows(auth *Auth) (fiveHour, weekly quotaWindow) {
 	}
 	return parseQuotaWindow(signals, claudeSignal5hUtilization, claudeSignal5hReset, claudeSignal5hStatus),
 		parseQuotaWindow(signals, claudeSignal7dUtilization, claudeSignal7dReset, claudeSignal7dStatus)
-}
-
-// isTeamPlan reports a workspace plan (Claude Team/Enterprise, ChatGPT
-// Team/Business/Enterprise/Edu), whose quota is spent before personal plans.
-// Claude stores the plan from its OAuth profile, Codex from its ID token.
-func isTeamPlan(auth *Auth) bool {
-	plan := strings.TrimSpace(auth.Attributes["plan_type"])
-	if plan == "" {
-		plan, _ = auth.Metadata["plan_type"].(string)
-	}
-	switch strings.ToLower(strings.TrimSpace(plan)) {
-	case "team", "business", "enterprise", "edu", "education":
-		return true
-	default:
-		return false
-	}
 }
 
 // earlierKnown orders known times ascending and unknown (zero) times last.
