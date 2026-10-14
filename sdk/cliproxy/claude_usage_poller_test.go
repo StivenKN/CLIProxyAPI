@@ -54,37 +54,30 @@ func TestResetFirstRoutingSelector(t *testing.T) {
 	}
 }
 
-func TestShouldPollClaudeUsage(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	claudeAuth := func(observedAt time.Time) *coreauth.Auth {
-		return &coreauth.Auth{
-			ID:         "claude-a.json",
-			Provider:   "claude",
-			Status:     coreauth.StatusActive,
-			Attributes: map[string]string{coreauth.AttributeAuthKind: coreauth.AuthKindOAuth},
-			Metadata:   map[string]any{"access_token": "token"},
-			Quota:      coreauth.QuotaState{ObservedAt: observedAt},
-		}
+func TestClaudeFableWeekly(t *testing.T) {
+	// Trimmed from a real /api/oauth/usage response.
+	payload := `{"limits":[
+		{"kind":"session","percent":16,"resets_at":"2026-10-14T03:00:00.180025+00:00","scope":null,"is_active":true},
+		{"kind":"weekly_all","percent":14,"resets_at":"2026-10-18T14:00:00.180049+00:00","scope":null,"is_active":false},
+		{"kind":"weekly_scoped","percent":7,"resets_at":"2026-10-18T14:00:00.180244+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":false}
+	]}`
+	var usage claudeUsageResponse
+	if errDecode := json.Unmarshal([]byte(payload), &usage); errDecode != nil {
+		t.Fatalf("decode: %v", errDecode)
+	}
+	utilization, resetAt, ok := claudeFableWeekly(usage)
+	if !ok {
+		t.Fatal("no Fable limit found")
+	}
+	if utilization != 0.07 {
+		t.Errorf("utilization = %v, want 0.07", utilization)
+	}
+	if want := time.Date(2026, 10, 18, 14, 0, 0, 180244000, time.UTC); !resetAt.Equal(want) {
+		t.Errorf("resetAt = %v, want %v", resetAt, want)
 	}
 
-	tests := []struct {
-		name    string
-		auth    *coreauth.Auth
-		retryAt time.Time
-		want    bool
-	}{
-		{"never observed", claudeAuth(time.Time{}), time.Time{}, true},
-		{"fresh from traffic", claudeAuth(now.Add(-5 * time.Minute)), time.Time{}, false},
-		{"stale snapshot", claudeAuth(now.Add(-claudeUsageFreshFor)), time.Time{}, true},
-		{"backing off after failure", claudeAuth(time.Time{}), now.Add(time.Minute), false},
-		{"backoff elapsed", claudeAuth(time.Time{}), now.Add(-time.Second), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldPollClaudeUsage(tt.auth, now, tt.retryAt); got != tt.want {
-				t.Fatalf("shouldPollClaudeUsage() = %v, want %v", got, tt.want)
-			}
-		})
+	if _, _, ok := claudeFableWeekly(claudeUsageResponse{Limits: usage.Limits[:2]}); ok {
+		t.Error("found a Fable limit in a response without one")
 	}
 }
 

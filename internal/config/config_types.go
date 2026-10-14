@@ -374,8 +374,8 @@ type QuotaExceeded struct {
 type RoutingConfig struct {
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first",
-	// "reset-first" (spend the credential whose 5-hour quota window resets soonest,
-	// priming idle windows).
+	// "reset-first" (spend the credential whose weekly quota resets soonest: Fable
+	// for Claude, the weekly window for Codex; exhausted credentials go last).
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.

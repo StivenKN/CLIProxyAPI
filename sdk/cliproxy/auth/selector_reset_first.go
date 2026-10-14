@@ -6,20 +6,24 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
-// ResetFirstSelector spends the credential whose 5-hour window resets soonest,
-// so quota that is about to reset gets used instead of expiring unused. When
-// that window is exhausted it moves to the next soonest reset. Credentials with
-// no active window come next, and exhausted ones last.
+// ResetFirstSelector spends the credential whose weekly quota resets soonest,
+// so quota that is about to reset gets used instead of expiring unused. For
+// Claude that is the Fable weekly limit, for Codex the weekly (secondary)
+// window. Credentials whose weekly window hasn't started come next, and
+// exhausted ones (5-hour, weekly or Fable) last, so routing moves on to the
+// next soonest reset as each credential runs out.
 //
 // It reads Claude's unified rate-limit watermarks and Codex's primary/secondary
 // watermarks from Auth.Quota.Signals, which response headers, the Claude usage
-// poller, and window priming keep current. Credentials without signals keep a
-// deterministic ID order, like fill-first.
+// poller, and window priming keep current, plus the Fable windows the usage
+// poller records with ObserveClaudeFableWeekly. Ties fall back to the sooner
+// 5-hour reset, then to ID order, like fill-first.
 type ResetFirstSelector struct {
 	// now is overridable in tests.
 	now func() time.Time
@@ -61,14 +65,30 @@ func (w quotaWindow) exhausted(now time.Time) bool {
 	return w.active(now) && (w.rejected || w.utilization >= 1)
 }
 
-type resetCandidate struct {
-	auth     *Auth
-	rank     int
-	resetAt  time.Time
-	weeklyAt time.Time
+// claudeFableWeekly holds each Claude credential's Fable weekly window by auth
+// ID. Only the usage endpoint reports it, and every response replaces
+// Quota.Signals wholesale, so it is kept here instead of in the signals.
+var claudeFableWeekly = struct {
+	sync.RWMutex
+	windows map[string]quotaWindow
+}{windows: make(map[string]quotaWindow)}
+
+// ObserveClaudeFableWeekly records a Claude credential's Fable weekly window:
+// the fraction used (0..1) and when it resets.
+func ObserveClaudeFableWeekly(authID string, utilization float64, resetAt time.Time) {
+	claudeFableWeekly.Lock()
+	defer claudeFableWeekly.Unlock()
+	claudeFableWeekly.windows[authID] = quotaWindow{utilization: utilization, resetAt: resetAt}
 }
 
-// Pick returns the highest-priority available credential with the soonest reset.
+type resetCandidate struct {
+	auth       *Auth
+	rank       int
+	resetAt    time.Time
+	fiveHourAt time.Time
+}
+
+// Pick returns the available credential whose weekly quota resets soonest.
 func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	_ = opts
 	now := time.Now()
@@ -91,32 +111,42 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 		if !a.resetAt.Equal(b.resetAt) {
 			return earlierKnown(a.resetAt, b.resetAt)
 		}
-		if !a.weeklyAt.Equal(b.weeklyAt) {
-			return earlierKnown(a.weeklyAt, b.weeklyAt)
+		if !a.fiveHourAt.Equal(b.fiveHourAt) {
+			return earlierKnown(a.fiveHourAt, b.fiveHourAt)
 		}
 		return a.auth.ID < b.auth.ID
 	})
 	return candidates[0].auth, nil
 }
 
+// rankForReset ranks a credential by its target weekly window (Fable for
+// Claude, the weekly window for Codex). Exhausted credentials sort by when
+// their last exhausted window resets.
 func rankForReset(auth *Auth, now time.Time) resetCandidate {
 	fiveHour, weekly := quotaWindows(auth)
-	candidate := resetCandidate{auth: auth}
-	if weekly.active(now) {
-		candidate.weeklyAt = weekly.resetAt
+	target := weekly
+	windows := []quotaWindow{fiveHour, weekly}
+	if !strings.EqualFold(auth.Provider, "codex") {
+		claudeFableWeekly.RLock()
+		target = claudeFableWeekly.windows[auth.ID]
+		claudeFableWeekly.RUnlock()
+		windows = append(windows, target)
 	}
-	switch {
-	case weekly.exhausted(now) || fiveHour.exhausted(now):
-		candidate.rank = resetRankExhausted
-		candidate.resetAt = fiveHour.resetAt
-		if weekly.exhausted(now) && weekly.resetAt.After(candidate.resetAt) {
-			candidate.resetAt = weekly.resetAt
+	candidate := resetCandidate{auth: auth, rank: resetRankIdle}
+	if fiveHour.active(now) {
+		candidate.fiveHourAt = fiveHour.resetAt
+	}
+	for _, window := range windows {
+		if window.exhausted(now) {
+			candidate.rank = resetRankExhausted
+			if window.resetAt.After(candidate.resetAt) {
+				candidate.resetAt = window.resetAt
+			}
 		}
-	case fiveHour.active(now):
+	}
+	if candidate.rank != resetRankExhausted && target.active(now) {
 		candidate.rank = resetRankActiveWindow
-		candidate.resetAt = fiveHour.resetAt
-	default:
-		candidate.rank = resetRankIdle
+		candidate.resetAt = target.resetAt
 	}
 	return candidate
 }

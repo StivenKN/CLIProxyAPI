@@ -148,9 +148,11 @@ access:
 # Routing strategy for selecting credentials when multiple match.
 routing:
   strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, reset-first
-  # reset-first spends the Claude credential whose 5-hour window resets soonest, then the next
-  # soonest once it is exhausted. It polls stale Claude OAuth usage every 5 minutes and sends a tiny
-  # message through any Claude/Codex OAuth credential whose 5-hour window is idle, so that window starts early.
+  # reset-first spends the credential whose weekly quota resets soonest (the Fable weekly limit for
+  # Claude, the weekly window for Codex). Credentials with an exhausted 5-hour, weekly or Fable window
+  # go last, so routing moves to the next soonest reset. It polls each Claude OAuth credential's usage
+  # every 6 hours and sends a tiny message through any Claude/Codex OAuth credential whose 5-hour
+  # window is idle, so that window starts early.
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.
