@@ -54,33 +54,6 @@ func TestResetFirstRoutingSelector(t *testing.T) {
 	}
 }
 
-func TestClaudeFableWeekly(t *testing.T) {
-	// Trimmed from a real /api/oauth/usage response.
-	payload := `{"limits":[
-		{"kind":"session","percent":16,"resets_at":"2026-10-14T03:00:00.180025+00:00","scope":null,"is_active":true},
-		{"kind":"weekly_all","percent":14,"resets_at":"2026-10-18T14:00:00.180049+00:00","scope":null,"is_active":false},
-		{"kind":"weekly_scoped","percent":7,"resets_at":"2026-10-18T14:00:00.180244+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":false}
-	]}`
-	var usage claudeUsageResponse
-	if errDecode := json.Unmarshal([]byte(payload), &usage); errDecode != nil {
-		t.Fatalf("decode: %v", errDecode)
-	}
-	utilization, resetAt, ok := claudeFableWeekly(usage)
-	if !ok {
-		t.Fatal("no Fable limit found")
-	}
-	if utilization != 0.07 {
-		t.Errorf("utilization = %v, want 0.07", utilization)
-	}
-	if want := time.Date(2026, 10, 18, 14, 0, 0, 180244000, time.UTC); !resetAt.Equal(want) {
-		t.Errorf("resetAt = %v, want %v", resetAt, want)
-	}
-
-	if _, _, ok := claudeFableWeekly(claudeUsageResponse{Limits: usage.Limits[:2]}); ok {
-		t.Error("found a Fable limit in a response without one")
-	}
-}
-
 func TestShouldPrimeQuotaWindow(t *testing.T) {
 	now := time.Now()
 	oauth := func(provider string) *coreauth.Auth {

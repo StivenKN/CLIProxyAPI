@@ -20,16 +20,15 @@ const (
 	claudeUsageURL       = "https://api.anthropic.com/api/oauth/usage"
 	claudeUsageFirstPoll = 15 * time.Second
 	// The loop wakes every claudeUsageTick to prime idle windows, but polls a
-	// credential only every claudeUsagePollEvery: Fable weekly resets move once a
+	// credential at most every claudeUsagePollEvery: weekly resets move once a
 	// week, and the usage endpoint has a strict per-credential rate limit
 	// (shared with the management panel). Failures retry after
 	// claudeUsageRetryAfter.
 	claudeUsageTick       = 30 * time.Minute
 	claudeUsagePollEvery  = 6 * time.Hour
 	claudeUsageRetryAfter = 30 * time.Minute
-	// A poll only overwrites a credential's 5-hour and weekly signals when they
-	// are older than claudeUsageFreshFor; credentials serving traffic stay
-	// fresher from response headers.
+	// Credentials whose signals are younger than claudeUsageFreshFor are not
+	// polled: serving traffic keeps them fresh from response headers.
 	claudeUsageFreshFor = 30 * time.Minute
 	// claudeUsageRequestTimeout bounds a background probe so one stalled
 	// request cannot stop later polls. No client request waits on it.
@@ -43,30 +42,15 @@ type claudeUsageWindow struct {
 	ResetsAt    *string `json:"resets_at"`
 }
 
-// claudeUsageLimit is one entry of the response's limits list. The Fable weekly
-// limit is kind "weekly_scoped" scoped to the "Fable" model. Percent is 0-100.
-type claudeUsageLimit struct {
-	Kind     string   `json:"kind"`
-	Percent  *float64 `json:"percent"`
-	ResetsAt *string  `json:"resets_at"`
-	IsActive bool     `json:"is_active"`
-	Scope    *struct {
-		Model *struct {
-			DisplayName string `json:"display_name"`
-		} `json:"model"`
-	} `json:"scope"`
-}
-
 type claudeUsageResponse struct {
 	FiveHour *claudeUsageWindow `json:"five_hour"`
 	SevenDay *claudeUsageWindow `json:"seven_day"`
-	Limits   []claudeUsageLimit `json:"limits"`
 }
 
 // runClaudeUsagePoller keeps the reset-first routing strategy informed. While
 // that strategy is active it polls the usage of each Claude OAuth credential
-// every claudeUsagePollEvery, recording its Fable weekly window and, for
-// credentials not serving traffic, its 5-hour and weekly windows. It then
+// that isn't serving traffic, at most every claudeUsagePollEvery, recording its
+// 5-hour and weekly windows. It then
 // primes idle 5-hour windows of Claude and Codex credentials (see
 // primeQuotaWindows).
 func (s *Service) runClaudeUsagePoller(ctx context.Context) {
@@ -105,6 +89,9 @@ func (s *Service) pollClaudeUsage(ctx context.Context, nextPollAt map[string]tim
 		if !isPollableClaudeAuth(auth) || now.Before(nextPollAt[auth.ID]) {
 			continue
 		}
+		if observedAt := auth.Quota.ObservedAt; !observedAt.IsZero() && now.Sub(observedAt) < claudeUsageFreshFor {
+			continue
+		}
 		usage, errFetch := s.fetchClaudeUsage(ctx, auth)
 		if errFetch != nil {
 			nextPollAt[auth.ID] = now.Add(claudeUsageRetryAfter)
@@ -112,37 +99,8 @@ func (s *Service) pollClaudeUsage(ctx context.Context, nextPollAt map[string]tim
 			continue
 		}
 		nextPollAt[auth.ID] = now.Add(claudeUsagePollEvery)
-		if utilization, resetAt, ok := claudeFableWeekly(usage); ok {
-			coreauth.ObserveClaudeFableWeekly(auth.ID, utilization, resetAt)
-		}
-		if observedAt := auth.Quota.ObservedAt; observedAt.IsZero() || now.Sub(observedAt) >= claudeUsageFreshFor {
-			s.coreManager.ObserveQuotaHeaders(ctx, auth.ID, claudeUsageHeaders(usage))
-		}
+		s.coreManager.ObserveQuotaHeaders(ctx, auth.ID, claudeUsageHeaders(usage))
 	}
-}
-
-// claudeFableWeekly returns the Fable weekly limit's used fraction and reset
-// time, preferring the active entry when several match. ok is false when the
-// response has no Fable limit.
-func claudeFableWeekly(usage claudeUsageResponse) (utilization float64, resetAt time.Time, ok bool) {
-	var fable *claudeUsageLimit
-	for i := range usage.Limits {
-		limit := &usage.Limits[i]
-		if limit.Kind != "weekly_scoped" || limit.Percent == nil || limit.Scope == nil || limit.Scope.Model == nil ||
-			!strings.HasPrefix(strings.ToLower(strings.TrimSpace(limit.Scope.Model.DisplayName)), "fable") {
-			continue
-		}
-		if fable == nil || (limit.IsActive && !fable.IsActive) {
-			fable = limit
-		}
-	}
-	if fable == nil {
-		return 0, time.Time{}, false
-	}
-	if fable.ResetsAt != nil {
-		resetAt, _ = time.Parse(time.RFC3339, strings.TrimSpace(*fable.ResetsAt))
-	}
-	return *fable.Percent / 100, resetAt, true
 }
 
 func isPollableClaudeAuth(auth *coreauth.Auth) bool {

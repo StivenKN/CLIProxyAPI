@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -14,17 +13,15 @@ import (
 
 // ResetFirstSelector spends the credential whose weekly quota resets soonest,
 // so quota that is about to reset gets used instead of expiring unused. For
-// Claude that is the Fable weekly limit, for Codex the weekly (secondary)
-// window. Credentials whose weekly window hasn't started come next, and ones
-// with an exhausted weekly or Fable window last, so routing moves on to the
-// next soonest reset as each credential runs out. The 5-hour window plays no
-// part in the order; a credential that hits it is skipped through the normal
-// cooldown after its 429.
+// Claude that is the 7-day window, for Codex the weekly (secondary) window.
+// Credentials whose weekly window hasn't started come next, and ones with an
+// exhausted weekly window last, so routing moves on to the next soonest reset
+// as each credential runs out. Nothing else feeds the order: a credential that
+// hits its 5-hour or a model-scoped limit is skipped through the normal
+// cooldown after its 429. Ties fall back to ID order, like fill-first.
 //
-// It reads Claude's 7-day and Codex's secondary watermarks from
-// Auth.Quota.Signals, which response headers, the Claude usage poller, and
-// window priming keep current, plus the Fable windows the usage poller records
-// with ObserveClaudeFableWeekly. Ties fall back to ID order, like fill-first.
+// It reads the weekly watermarks from Auth.Quota.Signals, which response
+// headers, the Claude usage poller, and window priming keep current.
 type ResetFirstSelector struct {
 	// now is overridable in tests.
 	now func() time.Time
@@ -66,22 +63,6 @@ func (w quotaWindow) exhausted(now time.Time) bool {
 	return w.active(now) && (w.rejected || w.utilization >= 1)
 }
 
-// claudeFableWeekly holds each Claude credential's Fable weekly window by auth
-// ID. Only the usage endpoint reports it, and every response replaces
-// Quota.Signals wholesale, so it is kept here instead of in the signals.
-var claudeFableWeekly = struct {
-	sync.RWMutex
-	windows map[string]quotaWindow
-}{windows: make(map[string]quotaWindow)}
-
-// ObserveClaudeFableWeekly records a Claude credential's Fable weekly window:
-// the fraction used (0..1) and when it resets.
-func ObserveClaudeFableWeekly(authID string, utilization float64, resetAt time.Time) {
-	claudeFableWeekly.Lock()
-	defer claudeFableWeekly.Unlock()
-	claudeFableWeekly.windows[authID] = quotaWindow{utilization: utilization, resetAt: resetAt}
-}
-
 type resetCandidate struct {
 	auth    *Auth
 	rank    int
@@ -116,31 +97,18 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 	return candidates[0].auth, nil
 }
 
-// rankForReset ranks a credential by its target weekly window (Fable for
-// Claude, the weekly window for Codex). Exhausted credentials sort by when
-// their last exhausted weekly window resets.
+// rankForReset ranks a credential by its weekly window. Exhausted credentials
+// sort by when that window resets.
 func rankForReset(auth *Auth, now time.Time) resetCandidate {
 	_, weekly := quotaWindows(auth)
-	target := weekly
-	windows := []quotaWindow{weekly}
-	if !strings.EqualFold(auth.Provider, "codex") {
-		claudeFableWeekly.RLock()
-		target = claudeFableWeekly.windows[auth.ID]
-		claudeFableWeekly.RUnlock()
-		windows = append(windows, target)
-	}
 	candidate := resetCandidate{auth: auth, rank: resetRankIdle}
-	for _, window := range windows {
-		if window.exhausted(now) {
-			candidate.rank = resetRankExhausted
-			if window.resetAt.After(candidate.resetAt) {
-				candidate.resetAt = window.resetAt
-			}
-		}
-	}
-	if candidate.rank != resetRankExhausted && target.active(now) {
+	switch {
+	case weekly.exhausted(now):
+		candidate.rank = resetRankExhausted
+		candidate.resetAt = weekly.resetAt
+	case weekly.active(now):
 		candidate.rank = resetRankActiveWindow
-		candidate.resetAt = target.resetAt
+		candidate.resetAt = weekly.resetAt
 	}
 	return candidate
 }

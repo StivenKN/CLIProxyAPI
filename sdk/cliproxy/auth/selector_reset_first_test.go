@@ -32,48 +32,39 @@ func mergeSignals(parts ...map[string]string) map[string]string {
 	return merged
 }
 
-// withFableWeekly records a Fable weekly window for the test's duration.
-func withFableWeekly(t *testing.T, authID string, utilization float64, resetAt time.Time) {
-	t.Helper()
-	ObserveClaudeFableWeekly(authID, utilization, resetAt)
-	t.Cleanup(func() {
-		claudeFableWeekly.Lock()
-		delete(claudeFableWeekly.windows, authID)
-		claudeFableWeekly.Unlock()
-	})
-}
-
 func TestResetFirstSelectorOrdering(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	selector := &ResetFirstSelector{now: func() time.Time { return now }}
 
-	// The 5-hour windows point the other way, so only the Fable reset can order these.
-	soon := resetFirstAuth("d-soon", claudeWindowSignals("5h", 0.5, now.Add(4*time.Hour)))
-	withFableWeekly(t, "d-soon", 0.3, now.Add(24*time.Hour))
-	later := resetFirstAuth("c-later", claudeWindowSignals("5h", 0.5, now.Add(time.Hour)))
-	withFableWeekly(t, "c-later", 0.1, now.Add(96*time.Hour))
+	// The 5-hour windows point the other way, so only the weekly reset can order these.
+	soon := resetFirstAuth("d-soon", mergeSignals(
+		claudeWindowSignals("5h", 0.5, now.Add(4*time.Hour)),
+		claudeWindowSignals("7d", 0.3, now.Add(24*time.Hour)),
+	))
+	later := resetFirstAuth("c-later", mergeSignals(
+		claudeWindowSignals("5h", 0.5, now.Add(time.Hour)),
+		claudeWindowSignals("7d", 0.1, now.Add(96*time.Hour)),
+	))
 	idle := resetFirstAuth("a-idle", nil)
-	expired := resetFirstAuth("b-expired-fable", nil)
-	withFableWeekly(t, "b-expired-fable", 0.9, now.Add(-time.Minute))
-	fableExhausted := resetFirstAuth("0-fable-exhausted", nil)
-	withFableWeekly(t, "0-fable-exhausted", 1, now.Add(2*time.Hour))
-	exhausted5h := resetFirstAuth("1-exhausted-5h", claudeWindowSignals("5h", 1, now.Add(time.Hour)))
-	withFableWeekly(t, "1-exhausted-5h", 0.2, now.Add(time.Hour))
-	exhausted7d := resetFirstAuth("2-exhausted-7d", claudeWindowSignals("7d", 1, now.Add(48*time.Hour)))
-	withFableWeekly(t, "2-exhausted-7d", 0.2, now.Add(time.Hour))
+	expired := resetFirstAuth("b-expired-weekly", claudeWindowSignals("7d", 0.9, now.Add(-time.Minute)))
+	exhausted5h := resetFirstAuth("1-exhausted-5h", mergeSignals(
+		claudeWindowSignals("5h", 1, now.Add(time.Hour)),
+		claudeWindowSignals("7d", 0.2, now.Add(12*time.Hour)),
+	))
+	exhaustedSoon := resetFirstAuth("3-exhausted-soon", claudeWindowSignals("7d", 1, now.Add(2*time.Hour)))
+	exhaustedLater := resetFirstAuth("2-exhausted-later", claudeWindowSignals("7d", 1, now.Add(48*time.Hour)))
 
 	tests := []struct {
 		name  string
 		auths []*Auth
 		want  string
 	}{
-		{"soonest Fable reset wins over sooner 5h reset", []*Auth{idle, later, soon}, "d-soon"},
-		{"started Fable window beats idle", []*Auth{idle, later}, "c-later"},
-		{"expired Fable window counts as idle, ID breaks ties", []*Auth{expired, idle}, "a-idle"},
-		{"exhausted Fable goes last", []*Auth{fableExhausted, later}, "c-later"},
-		{"exhausted 5h is ignored", []*Auth{exhausted5h, later}, "1-exhausted-5h"},
-		{"exhausted 7d goes last", []*Auth{exhausted7d, later}, "c-later"},
-		{"all exhausted picks earliest recovery", []*Auth{fableExhausted, exhausted7d}, "0-fable-exhausted"},
+		{"soonest weekly reset wins over sooner 5h reset", []*Auth{idle, later, soon}, "d-soon"},
+		{"started weekly window beats idle", []*Auth{idle, later}, "c-later"},
+		{"expired weekly window counts as idle, ID breaks ties", []*Auth{expired, idle}, "a-idle"},
+		{"exhausted 5h is ignored", []*Auth{exhausted5h, soon}, "1-exhausted-5h"},
+		{"exhausted weekly goes last", []*Auth{exhaustedSoon, later}, "c-later"},
+		{"all exhausted picks earliest recovery", []*Auth{exhaustedLater, exhaustedSoon}, "3-exhausted-soon"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
