@@ -59,6 +59,8 @@ func TestResetFirstSelectorOrdering(t *testing.T) {
 	withFableWeekly(t, "0-fable-exhausted", 1, now.Add(2*time.Hour))
 	exhausted5h := resetFirstAuth("1-exhausted-5h", claudeWindowSignals("5h", 1, now.Add(time.Hour)))
 	withFableWeekly(t, "1-exhausted-5h", 0.2, now.Add(time.Hour))
+	exhausted7d := resetFirstAuth("2-exhausted-7d", claudeWindowSignals("7d", 1, now.Add(48*time.Hour)))
+	withFableWeekly(t, "2-exhausted-7d", 0.2, now.Add(time.Hour))
 
 	tests := []struct {
 		name  string
@@ -69,8 +71,9 @@ func TestResetFirstSelectorOrdering(t *testing.T) {
 		{"started Fable window beats idle", []*Auth{idle, later}, "c-later"},
 		{"expired Fable window counts as idle, ID breaks ties", []*Auth{expired, idle}, "a-idle"},
 		{"exhausted Fable goes last", []*Auth{fableExhausted, later}, "c-later"},
-		{"exhausted 5h goes last despite soonest Fable reset", []*Auth{exhausted5h, later}, "c-later"},
-		{"all exhausted picks earliest recovery", []*Auth{fableExhausted, exhausted5h}, "1-exhausted-5h"},
+		{"exhausted 5h is ignored", []*Auth{exhausted5h, later}, "1-exhausted-5h"},
+		{"exhausted 7d goes last", []*Auth{exhausted7d, later}, "c-later"},
+		{"all exhausted picks earliest recovery", []*Auth{fableExhausted, exhausted7d}, "0-fable-exhausted"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,25 +85,6 @@ func TestResetFirstSelectorOrdering(t *testing.T) {
 				t.Fatalf("Pick() = %s, want %s", got.ID, tt.want)
 			}
 		})
-	}
-}
-
-func TestResetFirstSelectorFiveHourResetBreaksTies(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	selector := &ResetFirstSelector{now: func() time.Time { return now }}
-	fableReset := now.Add(72 * time.Hour)
-
-	a := resetFirstAuth("a", claudeWindowSignals("5h", 0.5, now.Add(3*time.Hour)))
-	withFableWeekly(t, "a", 0.4, fableReset)
-	b := resetFirstAuth("b", claudeWindowSignals("5h", 0.5, now.Add(time.Hour)))
-	withFableWeekly(t, "b", 0.4, fableReset)
-
-	got, err := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, []*Auth{a, b})
-	if err != nil {
-		t.Fatalf("Pick() error = %v", err)
-	}
-	if got.ID != "b" {
-		t.Fatalf("Pick() = %s, want the credential with the sooner 5-hour reset", got.ID)
 	}
 }
 

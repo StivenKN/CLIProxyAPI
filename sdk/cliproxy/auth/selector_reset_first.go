@@ -15,15 +15,16 @@ import (
 // ResetFirstSelector spends the credential whose weekly quota resets soonest,
 // so quota that is about to reset gets used instead of expiring unused. For
 // Claude that is the Fable weekly limit, for Codex the weekly (secondary)
-// window. Credentials whose weekly window hasn't started come next, and
-// exhausted ones (5-hour, weekly or Fable) last, so routing moves on to the
-// next soonest reset as each credential runs out.
+// window. Credentials whose weekly window hasn't started come next, and ones
+// with an exhausted weekly or Fable window last, so routing moves on to the
+// next soonest reset as each credential runs out. The 5-hour window plays no
+// part in the order; a credential that hits it is skipped through the normal
+// cooldown after its 429.
 //
-// It reads Claude's unified rate-limit watermarks and Codex's primary/secondary
-// watermarks from Auth.Quota.Signals, which response headers, the Claude usage
-// poller, and window priming keep current, plus the Fable windows the usage
-// poller records with ObserveClaudeFableWeekly. Ties fall back to the sooner
-// 5-hour reset, then to ID order, like fill-first.
+// It reads Claude's 7-day and Codex's secondary watermarks from
+// Auth.Quota.Signals, which response headers, the Claude usage poller, and
+// window priming keep current, plus the Fable windows the usage poller records
+// with ObserveClaudeFableWeekly. Ties fall back to ID order, like fill-first.
 type ResetFirstSelector struct {
 	// now is overridable in tests.
 	now func() time.Time
@@ -82,10 +83,9 @@ func ObserveClaudeFableWeekly(authID string, utilization float64, resetAt time.T
 }
 
 type resetCandidate struct {
-	auth       *Auth
-	rank       int
-	resetAt    time.Time
-	fiveHourAt time.Time
+	auth    *Auth
+	rank    int
+	resetAt time.Time
 }
 
 // Pick returns the available credential whose weekly quota resets soonest.
@@ -111,9 +111,6 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 		if !a.resetAt.Equal(b.resetAt) {
 			return earlierKnown(a.resetAt, b.resetAt)
 		}
-		if !a.fiveHourAt.Equal(b.fiveHourAt) {
-			return earlierKnown(a.fiveHourAt, b.fiveHourAt)
-		}
 		return a.auth.ID < b.auth.ID
 	})
 	return candidates[0].auth, nil
@@ -121,11 +118,11 @@ func (s *ResetFirstSelector) Pick(ctx context.Context, provider, model string, o
 
 // rankForReset ranks a credential by its target weekly window (Fable for
 // Claude, the weekly window for Codex). Exhausted credentials sort by when
-// their last exhausted window resets.
+// their last exhausted weekly window resets.
 func rankForReset(auth *Auth, now time.Time) resetCandidate {
-	fiveHour, weekly := quotaWindows(auth)
+	_, weekly := quotaWindows(auth)
 	target := weekly
-	windows := []quotaWindow{fiveHour, weekly}
+	windows := []quotaWindow{weekly}
 	if !strings.EqualFold(auth.Provider, "codex") {
 		claudeFableWeekly.RLock()
 		target = claudeFableWeekly.windows[auth.ID]
@@ -133,9 +130,6 @@ func rankForReset(auth *Auth, now time.Time) resetCandidate {
 		windows = append(windows, target)
 	}
 	candidate := resetCandidate{auth: auth, rank: resetRankIdle}
-	if fiveHour.active(now) {
-		candidate.fiveHourAt = fiveHour.resetAt
-	}
 	for _, window := range windows {
 		if window.exhausted(now) {
 			candidate.rank = resetRankExhausted
