@@ -23,7 +23,9 @@ read -r -p "Enter choice [1-2]: " choice
 case "$choice" in
   1)
     echo "--- Running with Pre-built Image ---"
-    docker compose up -d --remove-orphans --no-build
+    # This fork publishes its image to GHCR (see .github/workflows/docker-image.yml).
+    export CLI_PROXY_IMAGE="${CLI_PROXY_IMAGE:-ghcr.io/stivenkn/cli-proxy-api:latest}"
+    docker compose up -d --remove-orphans --no-build --pull always
     echo "Services are starting from remote image."
     echo "Run 'docker compose logs -f' to see the logs."
     ;;

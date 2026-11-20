@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"mime/multipart"
 	"runtime"
 	"strings"
@@ -500,30 +501,38 @@ func TestClaudeCacheControlDocChecksDoNotMaterializeLargeMessagesArray(t *testin
 		b.WriteString(`]}`)
 		raw := []byte(b.String())
 
-		doc := ojson.NewDoc(raw)
-		// Mutate messages.0 so "messages" splits into an ojson container (v.c != nil).
-		_ = doc.Set("messages.0.content.0.text", "short")
+		// Keep the fastest of a few runs: machine load only adds wall-clock time,
+		// while a traversal that is not single-pass is slow on every run.
+		fastest := time.Duration(math.MaxInt64)
+		for run := 0; run < 5; run++ {
+			doc := ojson.NewDoc(raw)
+			// Mutate messages.0 so "messages" splits into an ojson container (v.c != nil).
+			_ = doc.Set("messages.0.content.0.text", "short")
 
-		var mBefore, mAfter runtime.MemStats
-		runtime.ReadMemStats(&mBefore)
-		start := time.Now()
-		ensureCacheControlDoc(doc)
-		if got := countCacheControlsDoc(doc); got != 2 {
-			t.Fatalf("countCacheControlsDoc = %d, want 2", got)
-		}
-		enforceCacheControlLimitDoc(doc, 4)
-		upgradeClaudeCacheControlTTLDoc(doc, claudeCacheControlTTL1h)
-		normalizeCacheControlTTLDoc(doc)
-		stripClaudeCacheControlTTLDoc(doc)
-		elapsed := time.Since(start)
-		runtime.ReadMemStats(&mAfter)
+			var mBefore, mAfter runtime.MemStats
+			runtime.ReadMemStats(&mBefore)
+			start := time.Now()
+			ensureCacheControlDoc(doc)
+			if got := countCacheControlsDoc(doc); got != 2 {
+				t.Fatalf("countCacheControlsDoc = %d, want 2", got)
+			}
+			enforceCacheControlLimitDoc(doc, 4)
+			upgradeClaudeCacheControlTTLDoc(doc, claudeCacheControlTTL1h)
+			normalizeCacheControlTTLDoc(doc)
+			stripClaudeCacheControlTTLDoc(doc)
+			elapsed := time.Since(start)
+			runtime.ReadMemStats(&mAfter)
 
-		allocated := mAfter.TotalAlloc - mBefore.TotalAlloc
-		if allocated > 64*1024 {
-			t.Fatalf("split messages: cache control doc helpers allocated %d bytes (> 64 KiB)", allocated)
+			allocated := mAfter.TotalAlloc - mBefore.TotalAlloc
+			if allocated > 64*1024 {
+				t.Fatalf("split messages: cache control doc helpers allocated %d bytes (> 64 KiB)", allocated)
+			}
+			fastest = min(fastest, elapsed)
 		}
-		if elapsed > 20*time.Millisecond {
-			t.Fatalf("split messages took %v (> 20ms); expected O(N) single-pass traversal", elapsed)
+		// Race instrumentation slows this path several times over; the allocation
+		// guard above still runs under -race.
+		if !raceDetectorEnabled && fastest > 20*time.Millisecond {
+			t.Fatalf("split messages took %v (> 20ms); expected O(N) single-pass traversal", fastest)
 		}
 	})
 
@@ -547,27 +556,35 @@ func TestClaudeCacheControlDocChecksDoNotMaterializeLargeMessagesArray(t *testin
 		b.WriteString(`]}`)
 		raw := []byte(b.String())
 
-		doc := ojson.NewDoc(raw)
-		// Mutate only "model" so "messages" remains unsplit in root tail.
-		_ = doc.Set("model", "claude-sonnet-4-5-20250929")
+		// Keep the fastest of a few runs: machine load only adds wall-clock time,
+		// while a traversal that is not single-pass is slow on every run.
+		fastest := time.Duration(math.MaxInt64)
+		for run := 0; run < 5; run++ {
+			doc := ojson.NewDoc(raw)
+			// Mutate only "model" so "messages" remains unsplit in root tail.
+			_ = doc.Set("model", "claude-sonnet-4-5-20250929")
 
-		var mBefore, mAfter runtime.MemStats
-		runtime.ReadMemStats(&mBefore)
-		start := time.Now()
-		if got := countCacheControlsDoc(doc); got != 2 {
-			t.Fatalf("countCacheControlsDoc = %d, want 2", got)
-		}
-		enforceCacheControlLimitDoc(doc, 4)
-		normalizeCacheControlTTLDoc(doc)
-		elapsed := time.Since(start)
-		runtime.ReadMemStats(&mAfter)
+			var mBefore, mAfter runtime.MemStats
+			runtime.ReadMemStats(&mBefore)
+			start := time.Now()
+			if got := countCacheControlsDoc(doc); got != 2 {
+				t.Fatalf("countCacheControlsDoc = %d, want 2", got)
+			}
+			enforceCacheControlLimitDoc(doc, 4)
+			normalizeCacheControlTTLDoc(doc)
+			elapsed := time.Since(start)
+			runtime.ReadMemStats(&mAfter)
 
-		allocated := mAfter.TotalAlloc - mBefore.TotalAlloc
-		if allocated > 64*1024 {
-			t.Fatalf("unsplit 1024 messages: allocated %d bytes (> 64 KiB)", allocated)
+			allocated := mAfter.TotalAlloc - mBefore.TotalAlloc
+			if allocated > 64*1024 {
+				t.Fatalf("unsplit 1024 messages: allocated %d bytes (> 64 KiB)", allocated)
+			}
+			fastest = min(fastest, elapsed)
 		}
-		if elapsed > 20*time.Millisecond {
-			t.Fatalf("unsplit 1024 messages took %v (> 20ms); expected O(N) single-pass traversal", elapsed)
+		// Race instrumentation slows this path several times over; the allocation
+		// guard above still runs under -race.
+		if !raceDetectorEnabled && fastest > 20*time.Millisecond {
+			t.Fatalf("unsplit 1024 messages took %v (> 20ms); expected O(N) single-pass traversal", fastest)
 		}
 	})
 }
