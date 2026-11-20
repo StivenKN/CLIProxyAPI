@@ -558,6 +558,16 @@ func codexStopReason(responseData ojson.Result) string {
 }
 
 func mapCodexStopReasonToClaude(stopReason string, hasToolCall bool) string {
+	// A token limit or content filter can cut a tool call off mid-arguments.
+	// Report that cut-off instead of tool_use so clients do not run the tool
+	// with incomplete input.
+	switch stopReason {
+	case "max_tokens", "max_output_tokens":
+		return "max_tokens"
+	case "content_filter":
+		return "refusal"
+	}
+
 	if hasToolCall {
 		return "tool_use"
 	}
@@ -565,14 +575,10 @@ func mapCodexStopReasonToClaude(stopReason string, hasToolCall bool) string {
 	switch stopReason {
 	case "", "stop", "completed":
 		return "end_turn"
-	case "max_tokens", "max_output_tokens":
-		return "max_tokens"
 	case "tool_use", "tool_calls", "function_call":
 		return "end_turn"
 	case "end_turn", "stop_sequence", "pause_turn", "refusal", "model_context_window_exceeded":
 		return stopReason
-	case "content_filter":
-		return "refusal"
 	default:
 		return "end_turn"
 	}

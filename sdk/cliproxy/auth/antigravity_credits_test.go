@@ -373,3 +373,33 @@ func TestManagerExecuteAndStream_ExpiredNegativeCreditsHintRecoversDuringModelCo
 		})
 	}
 }
+
+// A request that read an exhausted hint must not wipe a fresh balance that a
+// background refresh published after that read.
+func TestClearAntigravityCreditsHintIfUnchangedKeepsNewerHint(t *testing.T) {
+	authID := fmt.Sprintf("ag-hint-cas-%d", time.Now().UnixNano())
+	t.Cleanup(func() { antigravityCreditsHintByAuth.Delete(authID) })
+
+	SetAntigravityCreditsHint(authID, AntigravityCreditsHint{Known: true, Available: false, MinCreditAmount: 1})
+	stale, ok := GetAntigravityCreditsHint(authID)
+	if !ok {
+		t.Fatal("stale hint not stored")
+	}
+
+	fresh := AntigravityCreditsHint{Known: true, Available: true, CreditAmount: 2516, MinCreditAmount: 50}
+	SetAntigravityCreditsHint(authID, fresh)
+	if ClearAntigravityCreditsHintIfUnchanged(authID, stale) {
+		t.Fatal("cleared a hint that changed after the caller read it")
+	}
+	if got, _ := GetAntigravityCreditsHint(authID); !got.Known || !got.Available || got.CreditAmount != 2516 {
+		t.Fatalf("hint = %#v, want the fresh balance kept", got)
+	}
+
+	current, _ := GetAntigravityCreditsHint(authID)
+	if !ClearAntigravityCreditsHintIfUnchanged(authID, current) {
+		t.Fatal("did not clear an unchanged hint")
+	}
+	if got, ok := GetAntigravityCreditsHint(authID); !ok || got.Known {
+		t.Fatalf("hint after clear = %#v (ok=%v), want an empty stored hint", got, ok)
+	}
+}

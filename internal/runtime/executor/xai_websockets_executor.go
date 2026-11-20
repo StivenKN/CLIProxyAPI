@@ -645,23 +645,24 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 				return nil, errBind
 			}
 			readCh = sess.activate(conn)
-			wsReqBodyRetry := buildXAIWebsocketRequestBody(prepared.body, prepared.finalizePayload)
+			// wsReqBody already carries the payload rules; resend it as is so the
+			// rules are not applied a second time.
 			helps.RecordAPIWebsocketRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 				URL:       wsURL,
 				Method:    "WEBSOCKET",
 				Headers:   wsHeaders.Clone(),
-				Body:      wsReqBodyRetry,
+				Body:      wsReqBody,
 				Provider:  e.Identifier(),
 				AuthID:    authID,
 				AuthLabel: authLabel,
 				AuthType:  authType,
 				AuthValue: authValue,
 			})
-			logXAIWebsocketRequest(executionSessionID, authID, wsURL, wsReqBodyRetry)
+			logXAIWebsocketRequest(executionSessionID, authID, wsURL, wsReqBody)
 			recordAPIWebsocketHandshake(ctx, e.cfg, respHSRetry)
 			reporter.StartResponseTTFT()
 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
-			if errSendRetry := writeWebsocketPayloadMessage("xai", sess, conn, wsReqBodyRetry); errSendRetry != nil {
+			if errSendRetry := writeWebsocketPayloadMessage("xai", sess, conn, wsReqBody); errSendRetry != nil {
 				errSendRetry = mapXAIWebsocketWriteError(sess, connRetry, errSendRetry)
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "send_retry", errSendRetry)
 				e.invalidateUpstreamConn(sess, connRetry, "send_error", errSendRetry)
@@ -669,7 +670,6 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 				sess.reqMu.Unlock()
 				return nil, errSendRetry
 			}
-			wsReqBody = wsReqBodyRetry
 		} else {
 			if sess != nil {
 				e.invalidateUpstreamConn(sess, conn, "send_error", errSend)

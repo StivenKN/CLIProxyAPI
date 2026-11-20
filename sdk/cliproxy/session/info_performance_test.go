@@ -3,55 +3,69 @@ package session
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 )
 
+// fastestRatio times measured and baseline alternately and compares their
+// fastest runs. Machine load only adds time to a run, so the fastest runs stay
+// stable on a busy machine, while rescanning the payload per candidate key
+// still multiplies the measured cost.
+func fastestRatio(measured, baseline func()) (ratio float64, fastestMeasured, fastestBaseline time.Duration) {
+	const samples = 200
+	for i := 0; i < samples; i++ {
+		start := time.Now()
+		baseline()
+		if d := time.Since(start); i == 0 || d < fastestBaseline {
+			fastestBaseline = d
+		}
+		start = time.Now()
+		measured()
+		if d := time.Since(start); i == 0 || d < fastestMeasured {
+			fastestMeasured = d
+		}
+	}
+	return float64(fastestMeasured) / float64(fastestBaseline), fastestMeasured, fastestBaseline
+}
+
 func TestHasExplicitSessionDoesNotRescanLargePayload(t *testing.T) {
 	payload := []byte(`{"messages":["` + strings.Repeat("x", 1<<20) + `"]}`)
 
-	singleLookup := testing.Benchmark(func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			root := util.ParseGJSONBytesNoCopy(payload)
-			if root.Get("missing_session_id").Exists() {
-				b.Fatal("unexpected session ID")
-			}
+	singleLookup := func() {
+		root := util.ParseGJSONBytesNoCopy(payload)
+		if root.Get("missing_session_id").Exists() {
+			t.Fatal("unexpected session ID")
 		}
-	})
-	detection := testing.Benchmark(func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			if hasExplicitSession(nil, payload) {
-				b.Fatal("unexpected explicit session")
-			}
+	}
+	detection := func() {
+		if hasExplicitSession(nil, payload) {
+			t.Fatal("unexpected explicit session")
 		}
-	})
+	}
 
-	if detection.NsPerOp() > singleLookup.NsPerOp()*12 {
-		t.Fatalf("explicit session detection rescans large payload: detection %d ns/op, single lookup %d ns/op", detection.NsPerOp(), singleLookup.NsPerOp())
+	if ratio, got, base := fastestRatio(detection, singleLookup); ratio > 12 {
+		t.Fatalf("explicit session detection rescans large payload: detection %v, single lookup %v (%.1fx)", got, base, ratio)
 	}
 }
 
 func TestExtractSessionInfoDoesNotRescanLargePayload(t *testing.T) {
 	payload := []byte(`{"messages":["` + strings.Repeat("x", 1<<20) + `"]}`)
 
-	singleLookup := testing.Benchmark(func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			root := util.ParseGJSONBytesNoCopy(payload)
-			if root.Get("missing_session_id").Exists() {
-				b.Fatal("unexpected session ID")
-			}
+	singleLookup := func() {
+		root := util.ParseGJSONBytesNoCopy(payload)
+		if root.Get("missing_session_id").Exists() {
+			t.Fatal("unexpected session ID")
 		}
-	})
-	extraction := testing.Benchmark(func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			if info, ok := ExtractSessionInfo(nil, payload, nil); ok {
-				b.Fatalf("unexpected session: %q", info.SessionID)
-			}
+	}
+	extraction := func() {
+		if info, ok := ExtractSessionInfo(nil, payload, nil); ok {
+			t.Fatalf("unexpected session: %q", info.SessionID)
 		}
-	})
+	}
 
 	// A request without session fields must not rescan a large message for every candidate key.
-	if extraction.NsPerOp() > singleLookup.NsPerOp()*12 {
-		t.Fatalf("session extraction rescans large payload: extraction %d ns/op, single lookup %d ns/op", extraction.NsPerOp(), singleLookup.NsPerOp())
+	if ratio, got, base := fastestRatio(extraction, singleLookup); ratio > 12 {
+		t.Fatalf("session extraction rescans large payload: extraction %v, single lookup %v (%.1fx)", got, base, ratio)
 	}
 }
