@@ -11,8 +11,10 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
+// readTimeout is a variable so tests can shorten it.
+var readTimeout = 60 * time.Second
+
 const (
-	readTimeout          = 60 * time.Second
 	writeTimeout         = 10 * time.Second
 	maxInboundMessageLen = 64 << 20 // 64 MiB
 	heartbeatInterval    = 30 * time.Second
@@ -21,113 +23,107 @@ const (
 
 var errClosed = errors.New("websocket session closed")
 
+// pendingRequest queues relay messages for one request. The session read loop
+// only appends to the queue, so it never waits on a slow consumer; a per-request
+// goroutine (forward) moves queued messages to ch in order and closes ch once the
+// request is finished and drained, or once the request context ends. Consumers
+// must read ch until it closes or cancel the request context.
 type pendingRequest struct {
 	mu         sync.Mutex
+	queue      []Message
+	wake       chan struct{}
 	ch         chan Message
 	closed     bool
 	terminal   bool
-	done       chan struct{}
 	reqCtx     context.Context
 	stopCancel func() bool
-	onBlocked  func()
 }
 
 func newPendingRequest(ctx context.Context) *pendingRequest {
-	return &pendingRequest{
+	pr := &pendingRequest{
+		wake:   make(chan struct{}, 1),
 		ch:     make(chan Message, pendingChannelBuffer),
-		done:   make(chan struct{}),
 		reqCtx: ctx,
+	}
+	go pr.forward()
+	return pr
+}
+
+func (pr *pendingRequest) forward() {
+	var ctxDone <-chan struct{}
+	if pr.reqCtx != nil {
+		ctxDone = pr.reqCtx.Done()
+	}
+	defer func() {
+		pr.mu.Lock()
+		pr.queue = nil
+		pr.mu.Unlock()
+		close(pr.ch)
+	}()
+	for {
+		pr.mu.Lock()
+		if len(pr.queue) == 0 {
+			finished := pr.closed
+			pr.mu.Unlock()
+			if finished {
+				return
+			}
+			select {
+			case <-pr.wake:
+				continue
+			case <-ctxDone:
+				return
+			}
+		}
+		msg := pr.queue[0]
+		pr.queue[0] = Message{}
+		pr.queue = pr.queue[1:]
+		pr.mu.Unlock()
+		select {
+		case pr.ch <- msg:
+		case <-ctxDone:
+			return
+		}
 	}
 }
 
-func (pr *pendingRequest) ensureInitializedLocked(ctx context.Context) {
-	if pr.done == nil {
-		pr.done = make(chan struct{})
+// signalLocked wakes the forwarder; pr.mu must be held.
+func (pr *pendingRequest) signalLocked() {
+	select {
+	case pr.wake <- struct{}{}:
+	default:
 	}
-	if pr.ch == nil {
-		pr.ch = make(chan Message, pendingChannelBuffer)
+}
+
+func (pr *pendingRequest) enqueue(sessClosed <-chan struct{}, msg Message, terminal bool) bool {
+	if pr == nil {
+		return false
 	}
-	if pr.reqCtx == nil && ctx != nil {
-		pr.reqCtx = ctx
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	if pr.closed || pr.terminal {
+		return false
 	}
+	select {
+	case <-sessClosed:
+		return false
+	default:
+	}
+	if pr.reqCtx != nil && pr.reqCtx.Err() != nil {
+		return false
+	}
+	pr.queue = append(pr.queue, msg)
+	pr.terminal = terminal
+	pr.signalLocked()
+	return true
 }
 
 func (pr *pendingRequest) deliver(sessClosed <-chan struct{}, msg Message) bool {
-	if pr == nil {
-		return false
-	}
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-	pr.ensureInitializedLocked(nil)
-	if pr.closed || pr.terminal {
-		return false
-	}
-
-	var ctxDone <-chan struct{}
-	if pr.reqCtx != nil {
-		ctxDone = pr.reqCtx.Done()
-	}
-
-	if pr.onBlocked != nil && len(pr.ch) == cap(pr.ch) {
-		fn := pr.onBlocked
-		pr.onBlocked = nil
-		fn()
-	}
-
-	select {
-	case <-pr.done:
-		return false
-	case <-sessClosed:
-		return false
-	case <-ctxDone:
-		return false
-	case pr.ch <- msg:
-		return true
-	}
+	return pr.enqueue(sessClosed, msg, false)
 }
 
 func (pr *pendingRequest) deliverTerminal(sessClosed <-chan struct{}, msg Message) bool {
-	if pr == nil {
-		return false
-	}
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-	pr.ensureInitializedLocked(nil)
-	if pr.closed || pr.terminal {
-		return false
-	}
-
-	var ctxDone <-chan struct{}
-	if pr.reqCtx != nil {
-		ctxDone = pr.reqCtx.Done()
-	}
-
-	if pr.onBlocked != nil && len(pr.ch) == cap(pr.ch) {
-		fn := pr.onBlocked
-		pr.onBlocked = nil
-		fn()
-	}
-
-	select {
-	case <-pr.done:
-		return false
-	case <-sessClosed:
-		return false
-	case <-ctxDone:
-		return false
-	case pr.ch <- msg:
-		pr.terminal = true
-		return true
-	}
-}
-
-func (pr *pendingRequest) setOnBlocked(fn func()) {
-	if pr == nil {
-		return
-	}
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-	pr.onBlocked = fn
+	return pr.enqueue(sessClosed, msg, true)
 }
 
 func (pr *pendingRequest) setStopCancel(stop func() bool) {
@@ -139,26 +135,22 @@ func (pr *pendingRequest) setStopCancel(stop func() bool) {
 	pr.stopCancel = stop
 }
 
-func (pr *pendingRequest) cancel() {
-	if pr == nil {
-		return
-	}
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-	pr.ensureInitializedLocked(nil)
+// finishLocked marks the request as receiving no more messages; the forwarder
+// drains what is queued and then closes ch. pr.mu must be held.
+func (pr *pendingRequest) finishLocked() bool {
 	if pr.closed {
-		return
+		return false
 	}
 	pr.closed = true
 	if pr.stopCancel != nil {
 		pr.stopCancel()
 	}
-	select {
-	case <-pr.done:
-	default:
-		close(pr.done)
-	}
-	close(pr.ch)
+	pr.signalLocked()
+	return true
+}
+
+func (pr *pendingRequest) cancel() {
+	pr.close()
 }
 
 func (pr *pendingRequest) cancelWithError(cause error) {
@@ -167,35 +159,13 @@ func (pr *pendingRequest) cancelWithError(cause error) {
 	}
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
-	pr.ensureInitializedLocked(nil)
 	if pr.closed {
 		return
 	}
-	pr.closed = true
-	if pr.stopCancel != nil {
-		pr.stopCancel()
-	}
-	select {
-	case <-pr.done:
-	default:
-		close(pr.done)
-	}
 	if !pr.terminal && cause != nil {
-		msg := Message{Type: MessageTypeError, Payload: map[string]any{"error": cause.Error()}}
-		select {
-		case pr.ch <- msg:
-		default:
-			select {
-			case <-pr.ch:
-			default:
-			}
-			select {
-			case pr.ch <- msg:
-			default:
-			}
-		}
+		pr.queue = append(pr.queue, Message{Type: MessageTypeError, Payload: map[string]any{"error": cause.Error()}})
 	}
-	close(pr.ch)
+	pr.finishLocked()
 }
 
 func (pr *pendingRequest) close() {
@@ -204,15 +174,7 @@ func (pr *pendingRequest) close() {
 	}
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
-	pr.ensureInitializedLocked(nil)
-	if pr.closed {
-		return
-	}
-	pr.closed = true
-	if pr.stopCancel != nil {
-		pr.stopCancel()
-	}
-	close(pr.ch)
+	pr.finishLocked()
 }
 
 type session struct {
@@ -276,6 +238,8 @@ func (s *session) run(ctx context.Context) {
 			s.cleanup(err)
 			return
 		}
+		// Any frame from the peer proves the connection is alive.
+		_ = s.conn.SetReadDeadline(time.Now().Add(readTimeout))
 		s.dispatch(msg)
 	}
 }
