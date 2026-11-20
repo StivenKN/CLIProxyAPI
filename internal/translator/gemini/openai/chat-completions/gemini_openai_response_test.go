@@ -664,3 +664,44 @@ func BenchmarkConvertGeminiResponseToOpenAI_TextDelta(b *testing.B) {
 		}
 	}
 }
+
+func TestConvertGeminiResponseToOpenAI_FinishReasonUsesOpenAIValues(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		upstreamReason   string
+		wantFinishReason string
+		wantNativeReason string
+	}{
+		{upstreamReason: "STOP", wantFinishReason: "stop", wantNativeReason: "stop"},
+		{upstreamReason: "MAX_TOKENS", wantFinishReason: "length", wantNativeReason: "max_tokens"},
+		{upstreamReason: "OTHER", wantFinishReason: "stop", wantNativeReason: "other"},
+	}
+
+	for _, tc := range cases {
+		t.Run("stream/"+tc.upstreamReason, func(t *testing.T) {
+			var param any
+			chunk := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"finishReason":"` + tc.upstreamReason + `"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}`)
+			out := ConvertGeminiResponseToOpenAI(ctx, "gemini-2.5-flash", nil, nil, chunk, &param)
+			if len(out) != 1 {
+				t.Fatalf("expected 1 chunk, got %d", len(out))
+			}
+			if got := ojson.GetBytesNoCopy(out[0], "choices.0.finish_reason").String(); got != tc.wantFinishReason {
+				t.Fatalf("stream finish_reason = %q, want %q; payload=%s", got, tc.wantFinishReason, out[0])
+			}
+			if got := ojson.GetBytesNoCopy(out[0], "choices.0.native_finish_reason").String(); got != tc.wantNativeReason {
+				t.Fatalf("stream native_finish_reason = %q, want %q; payload=%s", got, tc.wantNativeReason, out[0])
+			}
+		})
+
+		t.Run("nonstream/"+tc.upstreamReason, func(t *testing.T) {
+			raw := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"finishReason":"` + tc.upstreamReason + `"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}`)
+			out := ConvertGeminiResponseToOpenAINonStream(ctx, "gemini-2.5-flash", nil, nil, raw, nil)
+			if got := ojson.GetBytesNoCopy(out, "choices.0.finish_reason").String(); got != tc.wantFinishReason {
+				t.Fatalf("non-stream finish_reason = %q, want %q; payload=%s", got, tc.wantFinishReason, out)
+			}
+			if got := ojson.GetBytesNoCopy(out, "choices.0.native_finish_reason").String(); got != tc.wantNativeReason {
+				t.Fatalf("non-stream native_finish_reason = %q, want %q; payload=%s", got, tc.wantNativeReason, out)
+			}
+		})
+	}
+}

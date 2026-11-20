@@ -1143,6 +1143,23 @@ func TestConvertCodexResponseToClaude_StreamStopReasonMapping(t *testing.T) {
 			},
 			wantReason: "refusal",
 		},
+		{
+			name: "Tool call cut off by max output maps to max_tokens",
+			chunks: [][]byte{
+				[]byte("data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\"}}"),
+				[]byte("data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"query\\\":\\\"exa\"}"),
+				[]byte("data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}"),
+			},
+			wantReason: "max_tokens",
+		},
+		{
+			name: "Tool call stopped by content filter maps to refusal",
+			chunks: [][]byte{
+				[]byte("data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\"}}"),
+				[]byte("data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"content_filter\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}"),
+			},
+			wantReason: "refusal",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1364,6 +1381,34 @@ func TestConvertCodexResponseToClaudeNonStream_StopReasonMapping(t *testing.T) {
 					"incomplete_details":{"reason":"content_filter"},
 					"usage":{"input_tokens":1,"output_tokens":1},
 					"output":[]
+				}
+			}`),
+			wantReason: "refusal",
+		},
+		{
+			name: "Tool call cut off by max output maps to max_tokens",
+			response: []byte(`{
+				"type":"response.incomplete",
+				"response":{
+					"id":"resp_1",
+					"model":"gpt-5",
+					"incomplete_details":{"reason":"max_output_tokens"},
+					"usage":{"input_tokens":1,"output_tokens":1},
+					"output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"query\":\"exa"}]
+				}
+			}`),
+			wantReason: "max_tokens",
+		},
+		{
+			name: "Tool call stopped by content filter maps to refusal",
+			response: []byte(`{
+				"type":"response.incomplete",
+				"response":{
+					"id":"resp_1",
+					"model":"gpt-5",
+					"incomplete_details":{"reason":"content_filter"},
+					"usage":{"input_tokens":1,"output_tokens":1},
+					"output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}]
 				}
 			}`),
 			wantReason: "refusal",
