@@ -1,39 +1,51 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
 
-func TestPublishCatalogBytesRejectsCatalogThatEmptiesSections(t *testing.T) {
+// refreshGeneralCatalog runs one refresh of the general catalog updater
+// against data, as if it had been fetched from source.
+func refreshGeneralCatalog(t *testing.T, source string, data []byte) {
+	t.Helper()
+	u := &catalogUpdater{
+		fetch:         func(context.Context, string) ([]byte, error) { return data, nil },
+		publish:       generalCatalogUpdater.publish,
+		officialGuard: generalCatalogUpdater.officialGuard,
+	}
+	u.refresh(context.Background(), source, 0)
+}
+
+func restoreModelsCatalog(t *testing.T) *staticModelsJSON {
+	t.Helper()
 	before := getModels()
+	t.Cleanup(func() {
+		modelsCatalogStore.mu.Lock()
+		modelsCatalogStore.data = before
+		modelsCatalogStore.mu.Unlock()
+	})
+	return before
+}
+
+func TestOfficialCatalogRefreshRejectsCatalogWithoutSections(t *testing.T) {
+	before := restoreModelsCatalog(t)
 	if before == nil || len(before.Gemini) == 0 || len(before.CodexPro) == 0 {
 		t.Fatal("embedded catalog should populate gemini and codex-pro")
 	}
-	claudeBefore := len(before.Claude)
-	defer func() {
-		modelsCatalogStore.mu.Lock()
-		modelsCatalogStore.data = before
-		modelsCatalogStore.mu.Unlock()
-	}()
 
-	changed, errPublish := publishCatalogBytes([]byte(`{"unrelated":true}`))
-	if errPublish == nil {
-		t.Fatalf("expected a catalog without any model sections to be rejected, changed providers: %v", changed)
-	}
+	refreshGeneralCatalog(t, "", []byte(`{"unrelated":true}`))
+
 	after := getModels()
-	if after != before || len(after.Claude) != claudeBefore {
-		t.Fatalf("rejected catalog replaced the current one: claude %d -> %d, gemini %d", claudeBefore, len(after.Claude), len(after.Gemini))
+	if after != before {
+		t.Fatalf("re-keyed catalog replaced the current one: claude %d -> %d, gemini %d -> %d",
+			len(before.Claude), len(after.Claude), len(before.Gemini), len(after.Gemini))
 	}
 }
 
-func TestPublishCatalogBytesRejectsCatalogMissingOneSection(t *testing.T) {
-	before := getModels()
-	defer func() {
-		modelsCatalogStore.mu.Lock()
-		modelsCatalogStore.data = before
-		modelsCatalogStore.mu.Unlock()
-	}()
+func TestOfficialCatalogRefreshRejectsCatalogMissingOneSection(t *testing.T) {
+	before := restoreModelsCatalog(t)
 
 	// Keep every section except claude. Local models still add one Claude
 	// model, so the check must look at the fetched section itself.
@@ -43,22 +55,16 @@ func TestPublishCatalogBytesRejectsCatalogMissingOneSection(t *testing.T) {
 	if errMarshal != nil {
 		t.Fatal(errMarshal)
 	}
-	if _, errPublish := publishCatalogBytes(data); errPublish == nil {
-		t.Fatal("expected a catalog that drops the claude section to be rejected")
-	}
+
+	refreshGeneralCatalog(t, "", data)
+
 	if getModels() != before {
-		t.Fatal("rejected catalog replaced the current one")
+		t.Fatal("catalog without a claude section replaced the current one")
 	}
 }
 
-func TestPublishCatalogBytesAllowsSectionThatWasAlreadyEmpty(t *testing.T) {
-	before := getModels()
-	defer func() {
-		modelsCatalogStore.mu.Lock()
-		modelsCatalogStore.data = before
-		modelsCatalogStore.mu.Unlock()
-	}()
-
+func TestOfficialCatalogRefreshAllowsSectionThatWasAlreadyEmpty(t *testing.T) {
+	before := restoreModelsCatalog(t)
 	withoutKimi := *before
 	withoutKimi.Kimi = nil
 	modelsCatalogStore.mu.Lock()
@@ -66,16 +72,33 @@ func TestPublishCatalogBytesAllowsSectionThatWasAlreadyEmpty(t *testing.T) {
 	modelsCatalogStore.mu.Unlock()
 
 	next := withoutKimi
-	next.Claude = append([]*ModelInfo(nil), before.Claude...)
 	next.XAI = before.XAI[:1]
 	data, errMarshal := json.Marshal(&next)
 	if errMarshal != nil {
 		t.Fatal(errMarshal)
 	}
-	if _, errPublish := publishCatalogBytes(data); errPublish != nil {
-		t.Fatalf("catalog with a section that was already empty should publish: %v", errPublish)
-	}
+
+	refreshGeneralCatalog(t, "", data)
+
 	if got := len(getModels().XAI); got != 1 {
-		t.Fatalf("expected the new catalog to be published, xai has %d models", got)
+		t.Fatalf("catalog with an already-empty section was not published: xai has %d models", got)
+	}
+}
+
+func TestConfiguredCatalogRefreshPublishesPartialCatalog(t *testing.T) {
+	before := restoreModelsCatalog(t)
+
+	// A catalog the operator configured may list only some providers.
+	partial := staticModelsJSON{Claude: before.Claude[:1], Gemini: before.Gemini[:1]}
+	data, errMarshal := json.Marshal(&partial)
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+
+	refreshGeneralCatalog(t, "/etc/cliproxy/models.json", data)
+
+	after := getModels()
+	if after == before || len(after.Gemini) != 1 {
+		t.Fatalf("configured partial catalog was not published: gemini %d", len(after.Gemini))
 	}
 }
