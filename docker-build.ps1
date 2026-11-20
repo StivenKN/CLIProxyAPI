@@ -16,7 +16,11 @@ $choice = Read-Host -Prompt "Enter choice [1-2]"
 switch ($choice) {
     "1" {
         Write-Host "--- Running with Pre-built Image ---"
-        docker compose up -d --remove-orphans --no-build
+        # This fork publishes its image to GHCR (see .github/workflows/docker-image.yml).
+        if (-not $env:CLI_PROXY_IMAGE) {
+            $env:CLI_PROXY_IMAGE = "ghcr.io/stivenkn/cli-proxy-api:latest"
+        }
+        docker compose up -d --remove-orphans --no-build --pull always
         Write-Host "Services are starting from remote image."
         Write-Host "Run 'docker compose logs -f' to see the logs."
     }
