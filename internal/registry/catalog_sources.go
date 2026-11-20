@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,7 +124,7 @@ func (u *catalogUpdater) refresh(ctx context.Context, source string, generation 
 	}
 	u.mu.Unlock()
 	if errPublish != nil {
-		log.Warn("model catalog rejected; keeping last valid catalog")
+		log.WithError(errPublish).Warn("model catalog rejected; keeping last valid catalog")
 		return
 	}
 	notifyModelRefresh(changed)
@@ -224,7 +225,7 @@ func (u *catalogUpdater) refreshOnDemand(ctx context.Context, fallbackSource str
 	}
 	u.mu.Unlock()
 	if errPublish != nil {
-		log.Warn("model catalog rejected; keeping last valid catalog")
+		log.WithError(errPublish).Warn("model catalog rejected; keeping last valid catalog")
 		return CatalogSourceStatus{
 			Source: displaySource,
 			Error:  errPublish.Error(),
@@ -328,11 +329,14 @@ func publishCatalogBytes(data []byte) ([]string, error) {
 	if errValidate := validateModelsCatalog(&parsed); errValidate != nil {
 		return nil, errValidate
 	}
-	mergeLocalModels(&parsed)
 	old := getModels()
 	if len(parsed.Meta) == 0 && old != nil {
 		parsed.Meta = old.Meta
 	}
+	if emptied := emptiedCatalogSections(old, &parsed); len(emptied) > 0 {
+		return nil, fmt.Errorf("catalog would empty non-empty sections: %s", strings.Join(emptied, ", "))
+	}
+	mergeLocalModels(&parsed)
 	changed := detectChangedProviders(old, &parsed)
 	modelsCatalogStore.mu.Lock()
 	modelsCatalogStore.data = &parsed
