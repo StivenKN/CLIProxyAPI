@@ -640,7 +640,13 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 	responseDoc := ojson.NewDoc([]byte(`{"id":"","type":"message","role":"assistant","model":"","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`))
 	_ = responseDoc.Set("id", root.Get("response.responseId").String())
 	_ = responseDoc.Set("model", root.Get("response.modelVersion").String())
-	_ = responseDoc.Set("usage.input_tokens", promptTokens)
+	// Claude's input_tokens excludes cache reads, which are reported separately
+	// below; keep this in line with the stream path.
+	inputTokens := promptTokens - cachedTokens
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	_ = responseDoc.Set("usage.input_tokens", inputTokens)
 	_ = responseDoc.Set("usage.output_tokens", outputTokens)
 	// Add cache_read_input_tokens if cached tokens are present (indicates prompt caching is working)
 	if cachedTokens > 0 {
