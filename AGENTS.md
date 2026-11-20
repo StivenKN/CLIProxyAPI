@@ -3,7 +3,10 @@
 Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with OAuth and round-robin load balancing.
 
 ## Repository
-- GitHub: https://github.com/router-for-me/CLIProxyAPI
+- GitHub: https://github.com/StivenKN/CLIProxyAPI (default branch `main`)
+- This fork is maintained on its own. It started from https://github.com/router-for-me/CLIProxyAPI but no longer syncs with it: do not add an `upstream` remote, merge or rebase onto upstream, or open PRs or issues there. You can read upstream for ideas, but bring changes in as our own PR, reviewed like any other.
+- PRs, issues and `gh` commands target `StivenKN/CLIProxyAPI`. Check with `gh repo set-default --view` before opening one.
+- The Go module path stays `github.com/router-for-me/CLIProxyAPI/v8`. Renaming it would touch every import for no behavior change.
 
 ## Commands
 ```bash
