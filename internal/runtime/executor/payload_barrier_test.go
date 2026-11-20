@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
@@ -164,6 +166,92 @@ func TestPayloadBarrierXAIWebsocketRetry(t *testing.T) {
 	}
 	if ojson.GetBytes(first, "type").String() != "response.create" {
 		t.Fatalf("missing frame type: %s", first)
+	}
+}
+
+// When the first websocket write fails, the executor redials and resends. The
+// resent frame must be the one already finalized with payload rules, not a
+// second pass of the rules over it: a filter that deletes input.0 would
+// otherwise drop one more conversation turn on the retry.
+func TestPayloadBarrierXAIWebsocketSendRetryAppliesRulesOnce(t *testing.T) {
+	cfg := &config.Config{Payload: config.PayloadConfig{
+		Filter: []config.PayloadFilterRule{{Models: []config.PayloadModelRule{{Name: "*"}}, Params: []string{"input.0"}}},
+	}}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	captured := make(chan []byte, 4)
+	completed := []byte(`{"type":"response.completed","response":{"id":"resp-xai-retry","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, errUpgrade := upgrader.Upgrade(w, r, nil)
+		if errUpgrade != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		for {
+			_, body, errRead := conn.ReadMessage()
+			if errRead != nil {
+				return
+			}
+			captured <- body
+			if errWrite := conn.WriteMessage(websocket.TextMessage, completed); errWrite != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	var writes atomic.Int32
+	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
+		if writes.Add(1) == 1 {
+			_ = conn.SetWriteDeadline(time.Now().Add(-time.Second))
+		}
+	}
+	defer func() { testWebsocketWritePayloadHook = nil }()
+
+	exec := NewXAIWebsocketsExecutor(cfg)
+	exec.store = &codexWebsocketSessionStore{sessions: make(map[string]*codexWebsocketSession)}
+	defer exec.CloseExecutionSession("xai-send-retry-rules-once")
+	result, errExec := exec.ExecuteStream(
+		context.Background(),
+		&cliproxyauth.Auth{
+			ID:       "xai-send-retry-rules-once",
+			Provider: "xai",
+			Attributes: map[string]string{
+				"base_url":   server.URL,
+				"api_key":    "xai-test-key",
+				"websockets": "true",
+			},
+		},
+		cliproxyexecutor.Request{
+			Model:   "grok-4",
+			Payload: []byte(`{"model":"grok-4","input":[{"type":"message","role":"user","content":"first"},{"type":"message","role":"assistant","content":"second"},{"type":"message","role":"user","content":"third"}]}`),
+		},
+		cliproxyexecutor.Options{
+			SourceFormat: sdktranslator.FormatOpenAIResponse,
+			Metadata: map[string]any{
+				cliproxyexecutor.ExecutionSessionMetadataKey: "xai-send-retry-rules-once",
+			},
+		},
+	)
+	if errExec != nil {
+		t.Fatalf("ExecuteStream() error = %v", errExec)
+	}
+	for range result.Chunks {
+	}
+	if got := writes.Load(); got != 2 {
+		t.Fatalf("websocket payload writes = %d, want 2 (failed send, then retry)", got)
+	}
+
+	var sent []byte
+	select {
+	case sent = <-captured:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream did not receive the retried frame")
+	}
+	if got := ojson.GetBytes(sent, "input.#").Int(); got != 2 {
+		t.Fatalf("retried frame input items = %d, want 2 (rules applied once): %s", got, sent)
+	}
+	if got := ojson.GetBytes(sent, "input.0.content").String(); got != "second" {
+		t.Fatalf("retried frame input.0.content = %q, want %q: %s", got, "second", sent)
 	}
 }
 
