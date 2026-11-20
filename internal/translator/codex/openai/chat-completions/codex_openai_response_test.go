@@ -752,6 +752,21 @@ func TestConvertCodexResponseToOpenAI_NonStreamReasoningSummaryAndContent(t *tes
 	}
 }
 
+func TestConvertCodexResponseToOpenAI_NonStreamReasoningKeepsAllSummaryParts(t *testing.T) {
+	ctx := context.Background()
+	raw := []byte(`{"type":"response.completed","response":{"id":"resp_1","created_at":1700000000,"model":"gpt-5","status":"completed","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30},"output":[` +
+		`{"type":"reasoning","summary":[{"type":"summary_text","text":"First part"},{"type":"summary_text","text":"Second part"}]},` +
+		`{"type":"message","content":[{"type":"output_text","text":"Answer"}]}` +
+		`]}}`)
+	out := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5", nil, nil, raw, nil)
+
+	// The stream path ends every summary part with "\n\n", so parts stay apart.
+	want := "First part\n\nSecond part"
+	if got := ojson.GetBytesNoCopy(out, "choices.0.message.reasoning_content").String(); got != want {
+		t.Fatalf("expected reasoning_content %q, got %q; payload=%s", want, got, string(out))
+	}
+}
+
 func TestConvertCodexResponseToOpenAI_Issue5543_CacheWriteTokensAndServiceTier(t *testing.T) {
 	ctx := context.Background()
 
