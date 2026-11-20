@@ -64,6 +64,23 @@ func SetAntigravityCreditsHint(authID string, hint AntigravityCreditsHint) {
 	antigravityCreditsHintByAuth.Store(authID, hint)
 }
 
+// ClearAntigravityCreditsHintIfUnchanged clears the hint for an auth only if
+// the stored hint still equals old, the value the caller read. A hint published
+// in between, for example by a background balance refresh, is kept. It reports
+// whether the hint was cleared. Home mode has no compare-and-swap, so there it
+// clears unconditionally.
+func ClearAntigravityCreditsHintIfUnchanged(authID string, old AntigravityCreditsHint) bool {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return false
+	}
+	if _, homeMode, _ := homekv.CurrentKVClient(); homeMode {
+		SetAntigravityCreditsHint(authID, AntigravityCreditsHint{})
+		return true
+	}
+	return antigravityCreditsHintByAuth.CompareAndSwap(authID, old, AntigravityCreditsHint{UpdatedAt: time.Now()})
+}
+
 // GetAntigravityCreditsHint returns the latest known AI credits state for an auth.
 func GetAntigravityCreditsHint(authID string) (AntigravityCreditsHint, bool) {
 	hint, ok, err := GetAntigravityCreditsHintRequired(context.Background(), authID)
