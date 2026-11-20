@@ -723,6 +723,12 @@ func extractThinkingConfigFromGetter(get func(string) ojson.Result, provider str
 	}
 }
 
+// isNonEmptyString reports whether a request effort or level field holds a
+// usable value. JSON null and blank strings mean "not set", like an absent field.
+func isNonEmptyString(value ojson.Result) bool {
+	return value.Type == ojson.String && strings.TrimSpace(value.String()) != ""
+}
+
 func hasThinkingConfig(config ThinkingConfig) bool {
 	return config.Mode != ModeBudget || config.Budget != 0 || config.Level != ""
 }
@@ -894,10 +900,10 @@ func extractGeminiConfigFromGetter(get func(string) ojson.Result, provider strin
 	}
 
 	level := get(prefix + ".thinkingLevel")
-	if !level.Exists() {
+	if !isNonEmptyString(level) {
 		level = get(prefix + ".thinking_level")
 	}
-	if level.Exists() {
+	if isNonEmptyString(level) {
 		value := level.String()
 		switch value {
 		case "none":
@@ -944,7 +950,7 @@ func extractInteractionsConfigFromGetter(get func(string) ojson.Result) Thinking
 		"generation_config.thinkingConfig.thinkingLevel",
 	} {
 		level := get(path)
-		if !level.Exists() {
+		if !isNonEmptyString(level) {
 			continue
 		}
 		value := strings.ToLower(strings.TrimSpace(level.String()))
@@ -991,7 +997,7 @@ func extractOpenAIConfig(body []byte) ThinkingConfig {
 }
 
 func extractOpenAIConfigFromGetter(get func(string) ojson.Result) ThinkingConfig {
-	if effort := get("reasoning_effort"); effort.Exists() {
+	if effort := get("reasoning_effort"); isNonEmptyString(effort) {
 		value := effort.String()
 		if value == "none" {
 			return ThinkingConfig{Mode: ModeNone, Budget: 0}
@@ -1048,7 +1054,7 @@ func extractCodexConfig(body []byte) ThinkingConfig {
 }
 
 func extractCodexConfigFromGetter(get func(string) ojson.Result) ThinkingConfig {
-	if effort := get("reasoning.effort"); effort.Exists() {
+	if effort := get("reasoning.effort"); isNonEmptyString(effort) {
 		value := effort.String()
 		if value == "none" {
 			return ThinkingConfig{Mode: ModeNone, Budget: 0}

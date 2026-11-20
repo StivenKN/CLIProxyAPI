@@ -143,3 +143,111 @@ func TestQuotaWindowIdle(t *testing.T) {
 		})
 	}
 }
+
+func codexWindowAuth(id string, now time.Time, signals map[string]string) *Auth {
+	return &Auth{
+		ID: id, Provider: "codex", Status: StatusActive,
+		Quota: QuotaState{Signals: signals, ObservedAt: now},
+	}
+}
+
+// Some Codex plans report the weekly window as "primary", with no secondary
+// window or with a 5-hour secondary. Window-Minutes, not the slot name, says
+// which window is weekly.
+func TestResetFirstSelectorReadsCodexWeeklyWindowByDuration(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &ResetFirstSelector{now: func() time.Time { return now }}
+
+	t.Run("weekly primary only", func(t *testing.T) {
+		later := codexWindowAuth("a-later", now, map[string]string{
+			"X-Codex-Primary-Used-Percent":   "20",
+			"X-Codex-Primary-Window-Minutes": "10080",
+			"X-Codex-Primary-Reset-At":       strconv.FormatInt(now.Add(6*24*time.Hour).Unix(), 10),
+		})
+		soon := codexWindowAuth("b-soon", now, map[string]string{
+			"X-Codex-Primary-Used-Percent":   "20",
+			"X-Codex-Primary-Window-Minutes": "10080",
+			"X-Codex-Primary-Reset-At":       strconv.FormatInt(now.Add(24*time.Hour).Unix(), 10),
+		})
+		got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{later, soon})
+		if err != nil {
+			t.Fatalf("Pick() error = %v", err)
+		}
+		if got.ID != "b-soon" {
+			t.Fatalf("Pick() = %s, want b-soon", got.ID)
+		}
+	})
+
+	t.Run("weekly primary with 5-hour secondary", func(t *testing.T) {
+		later := codexWindowAuth("a-later", now, map[string]string{
+			"X-Codex-Primary-Used-Percent":     "20",
+			"X-Codex-Primary-Window-Minutes":   "10080",
+			"X-Codex-Primary-Reset-At":         strconv.FormatInt(now.Add(6*24*time.Hour).Unix(), 10),
+			"X-Codex-Secondary-Used-Percent":   "10",
+			"X-Codex-Secondary-Window-Minutes": "300",
+			"X-Codex-Secondary-Reset-At":       strconv.FormatInt(now.Add(time.Hour).Unix(), 10),
+		})
+		soon := codexWindowAuth("b-soon", now, map[string]string{
+			"X-Codex-Primary-Used-Percent":     "20",
+			"X-Codex-Primary-Window-Minutes":   "10080",
+			"X-Codex-Primary-Reset-At":         strconv.FormatInt(now.Add(24*time.Hour).Unix(), 10),
+			"X-Codex-Secondary-Used-Percent":   "10",
+			"X-Codex-Secondary-Window-Minutes": "300",
+			"X-Codex-Secondary-Reset-At":       strconv.FormatInt(now.Add(4*time.Hour).Unix(), 10),
+		})
+		got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{later, soon})
+		if err != nil {
+			t.Fatalf("Pick() error = %v", err)
+		}
+		if got.ID != "b-soon" {
+			t.Fatalf("Pick() = %s, want b-soon", got.ID)
+		}
+	})
+}
+
+func TestQuotaWindowIdleReadsCodexWindowsByDuration(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	weeklyReset := strconv.FormatInt(now.Add(6*24*time.Hour).Unix(), 10)
+	tests := []struct {
+		name    string
+		signals map[string]string
+		want    bool
+	}{
+		// No 5-hour window exists, so there is nothing to prime.
+		{"weekly primary only at 0%", map[string]string{
+			"X-Codex-Primary-Used-Percent":   "0",
+			"X-Codex-Primary-Window-Minutes": "10080",
+			"X-Codex-Primary-Reset-At":       weeklyReset,
+		}, false},
+		{"weekly primary with idle 5-hour secondary", map[string]string{
+			"X-Codex-Primary-Used-Percent":     "30",
+			"X-Codex-Primary-Window-Minutes":   "10080",
+			"X-Codex-Primary-Reset-At":         weeklyReset,
+			"X-Codex-Secondary-Used-Percent":   "0",
+			"X-Codex-Secondary-Window-Minutes": "300",
+			"X-Codex-Secondary-Reset-At":       strconv.FormatInt(now.Add(-time.Minute).Unix(), 10),
+		}, true},
+		{"weekly primary with active 5-hour secondary", map[string]string{
+			"X-Codex-Primary-Used-Percent":     "30",
+			"X-Codex-Primary-Window-Minutes":   "10080",
+			"X-Codex-Primary-Reset-At":         weeklyReset,
+			"X-Codex-Secondary-Used-Percent":   "5",
+			"X-Codex-Secondary-Window-Minutes": "300",
+			"X-Codex-Secondary-Reset-At":       strconv.FormatInt(now.Add(time.Hour).Unix(), 10),
+		}, false},
+		{"exhausted weekly primary", map[string]string{
+			"X-Codex-Primary-Used-Percent":     "100",
+			"X-Codex-Primary-Window-Minutes":   "10080",
+			"X-Codex-Primary-Reset-At":         weeklyReset,
+			"X-Codex-Secondary-Used-Percent":   "0",
+			"X-Codex-Secondary-Window-Minutes": "300",
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := QuotaWindowIdle(codexWindowAuth("a", now, tt.signals), now); got != tt.want {
+				t.Fatalf("QuotaWindowIdle() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

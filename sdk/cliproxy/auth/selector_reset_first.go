@@ -13,7 +13,7 @@ import (
 
 // ResetFirstSelector spends the credential whose weekly quota resets soonest,
 // so quota that is about to reset gets used instead of expiring unused. For
-// Claude that is the 7-day window, for Codex the weekly (secondary) window.
+// Claude that is the 7-day window, for Codex the 10080-minute window.
 // Credentials whose weekly window hasn't started come next, and ones with an
 // exhausted weekly window last, so routing moves on to the next soonest reset
 // as each credential runs out. Nothing else feeds the order: a credential that
@@ -35,10 +35,16 @@ const (
 	claudeSignal7dReset       = "Anthropic-Ratelimit-Unified-7d-Reset"
 	claudeSignal7dStatus      = "Anthropic-Ratelimit-Unified-7d-Status"
 
-	// Codex reports its 5-hour window as "primary" and its weekly window as
-	// "secondary": X-Codex-Primary-Used-Percent, X-Codex-Primary-Reset-At, ...
+	// Codex reports up to two windows, "primary" and "secondary":
+	// X-Codex-Primary-Used-Percent, X-Codex-Primary-Window-Minutes, ...
+	// Usually primary is the 5-hour window and secondary the weekly one, but
+	// some plans report the weekly window as primary, alone or with a 5-hour
+	// secondary, so Window-Minutes decides which is which.
 	codexSignalPrimary   = "X-Codex-Primary-"
 	codexSignalSecondary = "X-Codex-Secondary-"
+
+	codexFiveHourWindowMinutes = 5 * 60
+	codexWeeklyWindowMinutes   = 7 * 24 * 60
 )
 
 // Ranks order credentials before their reset times are compared.
@@ -52,6 +58,9 @@ type quotaWindow struct {
 	utilization float64 // fraction used, 0..1
 	resetAt     time.Time
 	rejected    bool
+	// missing means the provider reported the credential's window lengths and
+	// none of them is this window, as with a Codex plan that has only a weekly window.
+	missing bool
 }
 
 // active reports a window that has started and not yet reset.
@@ -121,7 +130,7 @@ func QuotaWindowIdle(auth *Auth, now time.Time) bool {
 		return false
 	}
 	fiveHour, weekly := quotaWindows(auth)
-	if weekly.exhausted(now) {
+	if fiveHour.missing || weekly.exhausted(now) {
 		return false
 	}
 	return !fiveHour.active(now) || fiveHour.utilization == 0
@@ -131,9 +140,7 @@ func QuotaWindowIdle(auth *Auth, now time.Time) bool {
 func quotaWindows(auth *Auth) (fiveHour, weekly quotaWindow) {
 	signals := auth.Quota.Signals
 	if strings.EqualFold(auth.Provider, "codex") {
-		observedAt := auth.Quota.ObservedAt
-		return parseCodexQuotaWindow(signals, codexSignalPrimary, observedAt),
-			parseCodexQuotaWindow(signals, codexSignalSecondary, observedAt)
+		return codexQuotaWindows(signals, auth.Quota.ObservedAt)
 	}
 	return parseQuotaWindow(signals, claudeSignal5hUtilization, claudeSignal5hReset, claudeSignal5hStatus),
 		parseQuotaWindow(signals, claudeSignal7dUtilization, claudeSignal7dReset, claudeSignal7dStatus)
@@ -167,6 +174,52 @@ func parseQuotaWindow(signals map[string]string, utilizationKey, resetKey, statu
 	}
 	window.rejected = strings.EqualFold(strings.TrimSpace(signals[statusKey]), "rejected")
 	return window
+}
+
+// codexQuotaWindows assigns Codex's primary and secondary windows to the
+// 5-hour and weekly roles by their Window-Minutes. A window without a usable
+// length keeps the usual mapping: primary is 5-hour, secondary is weekly.
+func codexQuotaWindows(signals map[string]string, observedAt time.Time) (fiveHour, weekly quotaWindow) {
+	lengthsReported, fiveHourSeen := false, false
+	for _, slot := range []struct {
+		prefix        string
+		weeklyDefault bool
+	}{{codexSignalPrimary, false}, {codexSignalSecondary, true}} {
+		if !codexWindowReported(signals, slot.prefix) {
+			continue
+		}
+		isWeekly := slot.weeklyDefault
+		if raw := strings.TrimSpace(signals[slot.prefix+"Window-Minutes"]); raw != "" {
+			if minutes, errParse := strconv.Atoi(raw); errParse == nil && minutes > 0 {
+				lengthsReported = true
+				switch {
+				case minutes >= codexWeeklyWindowMinutes:
+					isWeekly = true
+				case minutes <= codexFiveHourWindowMinutes:
+					isWeekly = false
+				}
+			}
+		}
+		window := parseCodexQuotaWindow(signals, slot.prefix, observedAt)
+		if isWeekly {
+			weekly = window
+		} else {
+			fiveHour = window
+			fiveHourSeen = true
+		}
+	}
+	fiveHour.missing = lengthsReported && !fiveHourSeen
+	return fiveHour, weekly
+}
+
+// codexWindowReported reports whether the signals carry any field of one Codex window.
+func codexWindowReported(signals map[string]string, prefix string) bool {
+	for _, field := range []string{"Used-Percent", "Window-Minutes", "Reset-At", "Reset-After-Seconds"} {
+		if strings.TrimSpace(signals[prefix+field]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseCodexQuotaWindow reads one Codex window. Used percent is 0-100, and the
