@@ -415,7 +415,7 @@ func (s *Service) ensureAuthDir() error {
 	info, err := os.Stat(authDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if mkErr := os.MkdirAll(authDir, 0o755); mkErr != nil {
+			if mkErr := os.MkdirAll(authDir, 0o700); mkErr != nil {
 				return fmt.Errorf("cliproxy: failed to create auth directory %s: %w", authDir, mkErr)
 			}
 			log.Infof("created missing auth directory: %s", authDir)
