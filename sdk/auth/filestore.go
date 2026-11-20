@@ -15,6 +15,7 @@ import (
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	log "github.com/sirupsen/logrus"
 )
 
 // PluginAuthParser parses auth JSON owned by plugin providers.
@@ -140,6 +141,11 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 				file, errOpen := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
 				if errOpen != nil {
 					return "", fmt.Errorf("auth filestore: open existing failed: %w", errOpen)
+				}
+				// The open keeps an existing file's mode, so tighten it explicitly.
+				// The file is already truncated, so keep writing if chmod fails.
+				if errChmod := file.Chmod(0o600); errChmod != nil {
+					log.Warnf("auth filestore: could not restrict %s to owner-only access: %v", path, errChmod)
 				}
 				if _, errWrite := file.Write(raw); errWrite != nil {
 					_ = file.Close()

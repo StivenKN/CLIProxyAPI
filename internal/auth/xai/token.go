@@ -49,7 +49,7 @@ func (ts *TokenStorage) SaveTokenToFile(authFilePath string) error {
 		return fmt.Errorf("xai token storage: merge metadata: %w", errMerge)
 	}
 
-	file, err := os.Create(authFilePath)
+	file, err := misc.OpenCredentialFile(authFilePath)
 	if err != nil {
 		return fmt.Errorf("xai token storage: create token file: %w", err)
 	}
