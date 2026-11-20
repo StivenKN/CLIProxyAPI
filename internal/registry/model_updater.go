@@ -214,15 +214,14 @@ func getModels() *staticModelsJSON {
 	return modelsCatalogStore.data
 }
 
-func validateModelsCatalog(data *staticModelsJSON) error {
-	if data == nil {
-		return fmt.Errorf("catalog is nil")
-	}
+type catalogSection struct {
+	name   string
+	models []*ModelInfo
+}
 
-	requiredSections := []struct {
-		name   string
-		models []*ModelInfo
-	}{
+// requiredCatalogSections lists the sections every general model catalog carries.
+func requiredCatalogSections(data *staticModelsJSON) []catalogSection {
+	return []catalogSection{
 		{name: "claude", models: data.Claude},
 		{name: "gemini", models: data.Gemini},
 		{name: "vertex", models: data.Vertex},
@@ -236,8 +235,14 @@ func validateModelsCatalog(data *staticModelsJSON) error {
 		{name: "xai", models: data.XAI},
 		{name: "meta", models: data.Meta},
 	}
+}
 
-	for _, section := range requiredSections {
+func validateModelsCatalog(data *staticModelsJSON) error {
+	if data == nil {
+		return fmt.Errorf("catalog is nil")
+	}
+
+	for _, section := range requiredCatalogSections(data) {
 		if err := validateModelSection(section.name, section.models); err != nil {
 			return err
 		}
@@ -266,4 +271,26 @@ func validateModelSection(section string, models []*ModelInfo) error {
 		seen[modelID] = struct{}{}
 	}
 	return nil
+}
+
+// emptiedCatalogSections returns the sections that hold catalog models in
+// current but none in next. next must be the fetched catalog before local
+// models are merged; a current section holding only local models counts as empty.
+func emptiedCatalogSections(current, next *staticModelsJSON) []string {
+	if current == nil || next == nil {
+		return nil
+	}
+	local := localModels
+	if local == nil {
+		local = &staticModelsJSON{}
+	}
+	currentSections := requiredCatalogSections(current)
+	localSections := requiredCatalogSections(local)
+	var emptied []string
+	for i, section := range requiredCatalogSections(next) {
+		if len(section.models) == 0 && len(currentSections[i].models) > len(localSections[i].models) {
+			emptied = append(emptied, section.name)
+		}
+	}
+	return emptied
 }

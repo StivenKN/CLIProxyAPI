@@ -922,10 +922,11 @@ func TestCaptureRequestInfoBoundsZstdExpansionWithoutAConfiguredLimit(t *testing
 }
 
 // The classic bomb (one segment frame that declares its whole content as its window, 49 KB for 512 MiB) is not decoded at all: its
-// window is past the bound, so the raw bytes are logged and nothing large is allocated.
+// window is past the bound, so the raw bytes are logged and nothing large is allocated. The window is set explicitly because the
+// encoder's default window for a level changes between klauspost/compress releases.
 func TestCaptureRequestInfoDoesNotDecodeASingleSegmentBomb(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	encoder, errNewWriter := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
+	encoder, errNewWriter := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithWindowSize(32<<20))
 	if errNewWriter != nil {
 		t.Fatal(errNewWriter)
 	}

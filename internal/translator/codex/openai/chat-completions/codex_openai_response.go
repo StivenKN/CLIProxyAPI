@@ -560,9 +560,12 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 					for _, summaryItem := range summaryArray {
 						if summaryItem.Get("type").String() == "summary_text" {
 							if text := summaryItem.Get("text").String(); text != "" {
+								// Separate parts with "\n\n"; the stream path sends it after each part.
+								if reasoningText != "" {
+									reasoningText += "\n\n"
+								}
 								reasoningText += text
 							}
-							break
 						}
 					}
 				}

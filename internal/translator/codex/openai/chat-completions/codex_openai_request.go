@@ -57,7 +57,8 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 	}
 
 	// Map reasoning effort
-	if v := root.Get("reasoning_effort"); v.Exists() {
+	// JSON null or a blank string means the client did not choose an effort.
+	if v := root.Get("reasoning_effort"); v.Type == ojson.String && strings.TrimSpace(v.String()) != "" {
 		_ = outDoc.Set("reasoning.effort", v.Value())
 	} else {
 		_ = outDoc.Set("reasoning.effort", "medium")

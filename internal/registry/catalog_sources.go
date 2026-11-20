@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,21 @@ type catalogUpdater struct {
 	fetch           func(context.Context, string) ([]byte, error)
 	fetchWithSource func(context.Context, string) ([]byte, string, error)
 	publish         func([]byte) ([]string, error)
+	// officialGuard, when set, must accept a catalog fetched from the official
+	// default sources (source "") before it is published.
+	officialGuard func([]byte) error
+}
+
+// publishCatalog publishes data fetched from source. Explicitly configured
+// sources may list fewer providers on purpose, so only catalogs from the
+// official default sources pass through officialGuard.
+func (u *catalogUpdater) publishCatalog(source string, data []byte) ([]string, error) {
+	if source == "" && u.officialGuard != nil {
+		if errGuard := u.officialGuard(data); errGuard != nil {
+			return nil, errGuard
+		}
+	}
+	return u.publish(data)
 }
 
 func (u *catalogUpdater) fetchCatalog(ctx context.Context, source string) ([]byte, string, error) {
@@ -117,13 +133,13 @@ func (u *catalogUpdater) refresh(ctx context.Context, source string, generation 
 		u.mu.Unlock()
 		return
 	}
-	changed, errPublish := u.publish(data)
+	changed, errPublish := u.publishCatalog(source, data)
 	if errPublish == nil {
 		u.publishedSeq = seq
 	}
 	u.mu.Unlock()
 	if errPublish != nil {
-		log.Warn("model catalog rejected; keeping last valid catalog")
+		log.WithError(errPublish).Warn("model catalog rejected; keeping last valid catalog")
 		return
 	}
 	notifyModelRefresh(changed)
@@ -218,13 +234,13 @@ func (u *catalogUpdater) refreshOnDemand(ctx context.Context, fallbackSource str
 			Refreshed: true,
 		}, nil
 	}
-	changed, errPublish := u.publish(data)
+	changed, errPublish := u.publishCatalog(source, data)
 	if errPublish == nil {
 		u.publishedSeq = seq
 	}
 	u.mu.Unlock()
 	if errPublish != nil {
-		log.Warn("model catalog rejected; keeping last valid catalog")
+		log.WithError(errPublish).Warn("model catalog rejected; keeping last valid catalog")
 		return CatalogSourceStatus{
 			Source: displaySource,
 			Error:  errPublish.Error(),
@@ -340,6 +356,24 @@ func publishCatalogBytes(data []byte) ([]string, error) {
 	return changed, nil
 }
 
+// guardOfficialCatalogBytes rejects an official catalog that would empty a
+// section the current catalog fills, such as a malformed or re-keyed file.
+func guardOfficialCatalogBytes(data []byte) error {
+	var parsed staticModelsJSON
+	if errUnmarshal := json.Unmarshal(data, &parsed); errUnmarshal != nil {
+		return errUnmarshal
+	}
+	old := getModels()
+	if len(parsed.Meta) == 0 && old != nil {
+		// publishCatalogBytes keeps the current meta section in this case.
+		parsed.Meta = old.Meta
+	}
+	if emptied := emptiedCatalogSections(old, &parsed); len(emptied) > 0 {
+		return fmt.Errorf("official catalog would empty non-empty sections: %s", strings.Join(emptied, ", "))
+	}
+	return nil
+}
+
 func dynamicCatalogFetcherWithSource(embedded []byte, urls *[]string, validate func([]byte) error) func(context.Context, string) ([]byte, string, error) {
 	return func(ctx context.Context, source string) ([]byte, string, error) {
 		var currentURLs []string
@@ -353,6 +387,7 @@ func dynamicCatalogFetcherWithSource(embedded []byte, urls *[]string, validate f
 var generalCatalogUpdater = &catalogUpdater{
 	fetchWithSource: dynamicCatalogFetcherWithSource(embeddedModelsJSON, &modelsURLs, validateCatalogBytes),
 	publish:         publishCatalogBytes,
+	officialGuard:   guardOfficialCatalogBytes,
 }
 var codexCatalogUpdater = &catalogUpdater{
 	fetchWithSource: dynamicCatalogFetcherWithSource(embeddedCodexClientModelsJSON, &codexClientModelsURLs, ValidateCodexClientModelsJSON),

@@ -66,7 +66,7 @@ func (s *VertexCredentialStorage) SaveTokenToFile(authFilePath string) error {
 		return fmt.Errorf("vertex credential: merge metadata failed: %w", errMerge)
 	}
 
-	f, err := os.Create(authFilePath)
+	f, err := misc.OpenCredentialFile(authFilePath)
 	if err != nil {
 		return fmt.Errorf("vertex credential: create file failed: %w", err)
 	}
