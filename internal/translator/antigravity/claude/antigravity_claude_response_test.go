@@ -267,6 +267,34 @@ func TestConvertAntigravityResponseToClaudeStream_ZeroCandidatesDoesNotCountCach
 	}
 }
 
+func TestConvertAntigravityResponseToClaudeNonStream_CachedTokensNotCountedTwice(t *testing.T) {
+	requestJSON := []byte(`{"model":"gemini-3.8-flash-high"}`)
+	responseJSON := []byte(`{
+		"response": {
+			"candidates": [{
+				"content": {"role": "model", "parts": [{"text": "hi"}]},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {"promptTokenCount": 1000, "cachedContentTokenCount": 900, "candidatesTokenCount": 5, "totalTokenCount": 1005},
+			"modelVersion": "gemini-3.8-flash-n",
+			"responseId": "resp_cached_nonstream"
+		}
+	}`)
+
+	output := ConvertAntigravityResponseToClaudeNonStream(context.Background(), "gemini-3.8-flash-high", requestJSON, requestJSON, responseJSON, nil)
+
+	// Claude's input_tokens excludes cache reads, matching the stream path.
+	if got := ojson.GetBytesNoCopy(output, "usage.input_tokens").Int(); got != 100 {
+		t.Fatalf("input_tokens = %d, want 100: %s", got, output)
+	}
+	if got := ojson.GetBytesNoCopy(output, "usage.cache_read_input_tokens").Int(); got != 900 {
+		t.Fatalf("cache_read_input_tokens = %d, want 900: %s", got, output)
+	}
+	if got := ojson.GetBytesNoCopy(output, "usage.output_tokens").Int(); got != 5 {
+		t.Fatalf("output_tokens = %d, want 5: %s", got, output)
+	}
+}
+
 func TestConvertAntigravityResponseToClaudeStream_AppendFinalEventsFallbackUsesRawPrompt(t *testing.T) {
 	params := &Params{
 		HasUsageMetadata:     true,
