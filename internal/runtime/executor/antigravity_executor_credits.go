@@ -299,7 +299,9 @@ func clearAntigravityCreditsFailureState(auth *cliproxyauth.Auth) {
 	_, hadFailure := antigravityCreditsFailureByAuth.LoadAndDelete(authID)
 	if hint, ok := cliproxyauth.GetAntigravityCreditsHint(authID); ok && hint.Known && !hint.Available {
 		if hadFailure || !cliproxyauth.IsAntigravityCreditsHintFresh(hint, time.Now()) {
-			cliproxyauth.SetAntigravityCreditsHint(authID, cliproxyauth.AntigravityCreditsHint{})
+			// A background refresh may publish a fresh balance after the read
+			// above; clearing only the hint we read keeps that balance.
+			cliproxyauth.ClearAntigravityCreditsHintIfUnchanged(authID, hint)
 		}
 	}
 }
