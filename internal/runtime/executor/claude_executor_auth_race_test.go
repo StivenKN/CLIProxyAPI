@@ -128,3 +128,36 @@ func TestClaudeExecutorSharedCredentialMetadataMixedAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// isClaudeSetupToken runs on every request that has no account UUID yet, while
+// the profile writer stores into the same map under the metadata lock. Its flag
+// reads must take that lock too, or concurrent requests on one credential can
+// abort the process with "concurrent map read and map write".
+func TestClaudeSetupTokenFlagReadsAreRaceFreeOnSharedCredential(t *testing.T) {
+	auth := newSharedClaudeOAuthAuth("claude-race-setup-token")
+	apiKey := auth.Attributes["api_key"]
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 200; j++ {
+				if i%2 == 0 {
+					claudeauth.StoreMetadataString(&auth.Metadata, claudeAccountProfileCheckedAtKey, "2026-01-01T00:00:00Z")
+					continue
+				}
+				_ = isClaudeSetupToken(auth, apiKey)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	claudeauth.StoreMetadataValue(&auth.Metadata, "is_setup_token", true)
+	if !isClaudeSetupToken(auth, apiKey) {
+		t.Fatal("isClaudeSetupToken() = false, want true when is_setup_token is set")
+	}
+}
