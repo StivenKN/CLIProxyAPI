@@ -77,10 +77,14 @@ func TestFinishReasonMaxTokens(t *testing.T) {
 	chunk2 := []byte(`{"response":{"candidates":[{"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":100,"totalTokenCount":110}}}`)
 	result2 := ConvertAntigravityResponseToOpenAI(ctx, "model", nil, nil, chunk2, &param)
 
-	// Verify finish_reason is "max_tokens"
+	// Verify finish_reason is OpenAI's "length"; the raw Gemini value stays in native_finish_reason
 	fr := ojson.GetBytesNoCopy(result2[0], "choices.0.finish_reason").String()
-	if fr != "max_tokens" {
-		t.Errorf("Expected finish_reason 'max_tokens', got: %s", fr)
+	if fr != "length" {
+		t.Errorf("Expected finish_reason 'length', got: %s", fr)
+	}
+	nfr := ojson.GetBytesNoCopy(result2[0], "choices.0.native_finish_reason").String()
+	if nfr != "max_tokens" {
+		t.Errorf("Expected native_finish_reason 'max_tokens', got: %s", nfr)
 	}
 }
 
