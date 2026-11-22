@@ -596,7 +596,10 @@ func isNilInterface(value any) bool {
 //   - c: The Gin context containing the HTTP request
 //
 // Returns:
-//   - string: The alt parameter value, or empty string if it's "sse"
+//   - string: The alt parameter value, or empty string if it's "sse" or the
+//     internal "responses/compact" mode, which only the /responses/compact
+//     handler may set: a client-supplied one sent chat or messages bodies to
+//     the upstream compact endpoint, and its 404 cooled the model for 12h.
 func (h *BaseAPIHandler) GetAlt(c *gin.Context) string {
 	var alt string
 	var hasAlt bool
@@ -604,7 +607,7 @@ func (h *BaseAPIHandler) GetAlt(c *gin.Context) string {
 	if !hasAlt {
 		alt, _ = c.GetQuery("$alt")
 	}
-	if alt == "sse" {
+	if alt == "sse" || alt == "responses/compact" {
 		return ""
 	}
 	return alt
