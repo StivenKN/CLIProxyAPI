@@ -20,12 +20,12 @@ func TestHubReview_CloseAndRevokeDoNotBlockOnBlockedWriteWhenQueueNotFull(t *tes
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 
-	srvStalled := dialRole(t, srv.URL, "key-revoke", RoleServer, "srv-stalled", "Stalled Server")
-	cliRevoke := dialRole(t, srv.URL, "key-revoke", RoleClient, "cli-revoke", "Revoke Client")
+	srvStalled := dialRole(t, hub, srv.URL, "key-revoke", RoleServer, "srv-stalled", "Stalled Server")
+	cliRevoke := dialRole(t, hub, srv.URL, "key-revoke", RoleClient, "cli-revoke", "Revoke Client")
 	_ = readTextJSONFrame(t, cliRevoke)
 
-	srvKeep := dialRole(t, srv.URL, "key-keep", RoleServer, "srv-keep", "Keep Server")
-	cliKeep := dialRole(t, srv.URL, "key-keep", RoleClient, "cli-keep", "Keep Client")
+	srvKeep := dialRole(t, hub, srv.URL, "key-keep", RoleServer, "srv-keep", "Keep Server")
+	cliKeep := dialRole(t, hub, srv.URL, "key-keep", RoleClient, "cli-keep", "Keep Client")
 	_ = readTextJSONFrame(t, cliKeep)
 
 	// Send two 8 MiB frames to srvStalled without reading from srvStalled:
@@ -108,7 +108,7 @@ func TestHubBudget_ReconnectRetainsInFlightTenantBudget(t *testing.T) {
 				hub.UpdateAllowedAPIKeys([]string{"key"})
 				srv := newGatedTunnelServer(t, hub)
 				t.Cleanup(func() { close(forceClose) })
-				oldConn := dialRole(t, srv.URL, "key", RoleClient, "client", "Old Client")
+				oldConn := dialRole(t, hub, srv.URL, "key", RoleClient, "client", "Old Client")
 				_ = readTextJSONFrame(t, oldConn)
 				old := lookupTunnelPeer(t, hub, "key", "client")
 				tenant := old.tenant
@@ -146,9 +146,9 @@ func TestHubBudget_ReconnectRetainsInFlightTenantBudget(t *testing.T) {
 				hub.releaseReservation("key", "aborted", reservation)
 				assertRetained(0)
 
-				client := dialRole(t, srv.URL, "key", RoleClient, "client", "Replacement Client")
+				client := dialRole(t, hub, srv.URL, "key", RoleClient, "client", "Replacement Client")
 				_ = readTextJSONFrame(t, client)
-				server := dialRole(t, srv.URL, "key", RoleServer, "server", "Replacement Server")
+				server := dialRole(t, hub, srv.URL, "key", RoleServer, "server", "Replacement Server")
 				if online := readTextJSONFrame(t, client); online.Get("type").String() != ControlTypeServerOnline {
 					t.Fatalf("unexpected topology event: %s", online.Raw)
 				}
@@ -226,9 +226,9 @@ func TestHubReview_ByteBudgetBackpressureAndReclaim(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 
-	srvSlow := dialRole(t, srv.URL, "key-mem", RoleServer, "srv-mem-slow", "Slow Mem Server")
-	srvClean := dialRole(t, srv.URL, "key-mem", RoleServer, "srv-mem-clean", "Clean Mem Server")
-	cli := dialRole(t, srv.URL, "key-mem", RoleClient, "cli-mem", "Mem Client")
+	srvSlow := dialRole(t, hub, srv.URL, "key-mem", RoleServer, "srv-mem-slow", "Slow Mem Server")
+	srvClean := dialRole(t, hub, srv.URL, "key-mem", RoleServer, "srv-mem-clean", "Clean Mem Server")
+	cli := dialRole(t, hub, srv.URL, "key-mem", RoleClient, "cli-mem", "Mem Client")
 	_ = readTextJSONFrame(t, cli)
 
 	gotFull := make(chan struct{})
@@ -319,7 +319,7 @@ func TestHubReview_ListServersLinearizableWithServerOffline(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 
-	cli := dialRole(t, srv.URL, "key-lin", RoleClient, "cli-lin", "Linearizable Client")
+	cli := dialRole(t, hub, srv.URL, "key-lin", RoleClient, "cli-lin", "Linearizable Client")
 	initFrame := readTextJSONFrame(t, cli)
 	if initFrame.Get("servers.#").Int() != 0 {
 		t.Fatalf("expected initial empty server_list, got %s", initFrame.Raw)
@@ -364,7 +364,7 @@ func TestHubReview_ListServersLinearizableWithServerOffline(t *testing.T) {
 		_ = cli.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"list_servers","request_id":%q}`, reqID)))
 	}
 
-	sConn := dialRole(t, srv.URL, "key-lin", RoleServer, "ephemeral-srv-0", "Ephemeral")
+	sConn := dialRole(t, hub, srv.URL, "key-lin", RoleServer, "ephemeral-srv-0", "Ephemeral")
 	hookEntered := make(chan struct{})
 	var hookOnce sync.Once
 	hub.testBeforeListServersEnqueue = func() {

@@ -184,13 +184,16 @@ func TestHubAuth_MethodAndCredentials(t *testing.T) {
 			"X-Tunnel-Type": {"  Header-Type-01  "},
 		}
 		// Blank query type must fall back to X-Tunnel-Type; non-blank query type overrides header.
+		waitSrv1 := expectTunnelCommit(hub, "key-beta", "hdr-srv-1")
 		conn, resp, errDial := websocket.DefaultDialer.Dial(dialTunnelURL(srv.URL, url.Values{"type": {"   "}}), headers)
 		closeHTTPResponseBody(t, resp)
 		if errDial != nil {
 			t.Fatalf("Dial with X-Tunnel-* headers error = %v", errDial)
 		}
 		registerCleanupConn(t, conn)
+		waitSrv1(t)
 
+		waitSrv2 := expectTunnelCommit(hub, "key-beta", "hdr-srv-2")
 		overrideConn, overResp, errOver := websocket.DefaultDialer.Dial(
 			dialTunnelURL(srv.URL, url.Values{"role": {"server"}, "uuid": {"hdr-srv-2"}, "name": {"Override Server"}, "type": {"Query-Type"}}),
 			http.Header{"Authorization": {"Bearer key-beta"}, "X-Tunnel-Type": {"Ignored-Header-Type"}},
@@ -200,6 +203,7 @@ func TestHubAuth_MethodAndCredentials(t *testing.T) {
 			t.Fatalf("Dial with query type override error = %v", errOver)
 		}
 		registerCleanupConn(t, overrideConn)
+		waitSrv2(t)
 
 		// Client role ignores type (both omitted and blank/arbitrary values allowed).
 		cliCheck, cliResp, errCli := websocket.DefaultDialer.Dial(

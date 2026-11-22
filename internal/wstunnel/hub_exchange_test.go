@@ -14,16 +14,17 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func dialRole(t *testing.T, serverURL, apiKey string, role Role, uuid, name string) *websocket.Conn {
+// dialRole dials a tunnel peer and returns once the hub has registered it.
+func dialRole(t *testing.T, hub *Hub, serverURL, apiKey string, role Role, uuid, name string) *websocket.Conn {
 	t.Helper()
 	serverType := ""
 	if role == RoleServer {
 		serverType = "test-server"
 	}
-	return dialRoleWithType(t, serverURL, apiKey, role, uuid, name, serverType)
+	return dialRoleWithType(t, hub, serverURL, apiKey, role, uuid, name, serverType)
 }
 
-func dialRoleWithType(t *testing.T, serverURL, apiKey string, role Role, uuid, name, serverType string) *websocket.Conn {
+func dialRoleWithType(t *testing.T, hub *Hub, serverURL, apiKey string, role Role, uuid, name, serverType string) *websocket.Conn {
 	t.Helper()
 	q := url.Values{
 		"role": {string(role)},
@@ -33,6 +34,7 @@ func dialRoleWithType(t *testing.T, serverURL, apiKey string, role Role, uuid, n
 	if serverType != "" {
 		q.Set("type", serverType)
 	}
+	waitCommitted := expectTunnelCommit(hub, apiKey, uuid)
 	conn, resp, errDial := websocket.DefaultDialer.Dial(
 		dialTunnelURL(serverURL, q),
 		http.Header{"Authorization": {"Bearer " + apiKey}},
@@ -42,7 +44,32 @@ func dialRoleWithType(t *testing.T, serverURL, apiKey string, role Role, uuid, n
 		t.Fatalf("dialRole(%s, %s) error = %v", role, uuid, errDial)
 	}
 	registerCleanupConn(t, conn)
+	waitCommitted(t)
 	return conn
+}
+
+// expectTunnelCommit must be called before dialing. The returned func waits
+// until the hub registers apiKey/uuid: the hub writes HTTP 101 before it
+// registers the peer, so a successful Dial alone does not guarantee that
+// later peers see this one in their server_list.
+func expectTunnelCommit(hub *Hub, apiKey, uuid string) func(*testing.T) {
+	committed := make(chan struct{})
+	var once sync.Once
+	hub.mu.Lock()
+	prev := hub.testOnPeerCommitted
+	hub.testOnPeerCommitted = func(gotKey, gotUUID string) {
+		if prev != nil {
+			prev(gotKey, gotUUID)
+		}
+		if gotKey == apiKey && gotUUID == uuid {
+			once.Do(func() { close(committed) })
+		}
+	}
+	hub.mu.Unlock()
+	return func(t *testing.T) {
+		t.Helper()
+		waitTunnelSignal(t, committed, "registration of "+uuid)
+	}
 }
 
 func readBinaryDataFrame(t *testing.T, conn *websocket.Conn) DataFrameView {
@@ -69,12 +96,12 @@ func TestHubExchange_TenantIsolation(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Same UUIDs registered under two distinct api-keys must not collide or leak.
-	srv1 := dialRole(t, srv.URL, "key-1", RoleServer, "shared-srv-uuid", "Tenant1-Server")
-	srv2 := dialRole(t, srv.URL, "key-2", RoleServer, "shared-srv-uuid", "Tenant2-Server")
-	_ = dialRole(t, srv.URL, "key-2", RoleServer, "only-in-tenant-2", "Secret-Server-2")
+	srv1 := dialRole(t, hub, srv.URL, "key-1", RoleServer, "shared-srv-uuid", "Tenant1-Server")
+	srv2 := dialRole(t, hub, srv.URL, "key-2", RoleServer, "shared-srv-uuid", "Tenant2-Server")
+	_ = dialRole(t, hub, srv.URL, "key-2", RoleServer, "only-in-tenant-2", "Secret-Server-2")
 
-	cli1 := dialRole(t, srv.URL, "key-1", RoleClient, "shared-cli-uuid", "Tenant1-Client")
-	cli2 := dialRole(t, srv.URL, "key-2", RoleClient, "shared-cli-uuid", "Tenant2-Client")
+	cli1 := dialRole(t, hub, srv.URL, "key-1", RoleClient, "shared-cli-uuid", "Tenant1-Client")
+	cli2 := dialRole(t, hub, srv.URL, "key-2", RoleClient, "shared-cli-uuid", "Tenant2-Client")
 
 	list1 := readTextJSONFrame(t, cli1)
 	if list1.Get("servers.#").Int() != 1 || list1.Get("servers.0.name").String() != "Tenant1-Server" {
@@ -121,10 +148,10 @@ func TestHubExchange_DiscoveryEventsAndControlCommands(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Connect servers out of lexicographical order to verify deterministic sorting and custom types.
-	srvB := dialRoleWithType(t, srv.URL, "key-disc", RoleServer, "srv-b", "Server B", "linux-builder")
-	_ = dialRoleWithType(t, srv.URL, "key-disc", RoleServer, "srv-a", "Server A", "cpa-desktop")
+	srvB := dialRoleWithType(t, hub, srv.URL, "key-disc", RoleServer, "srv-b", "Server B", "linux-builder")
+	_ = dialRoleWithType(t, hub, srv.URL, "key-disc", RoleServer, "srv-a", "Server A", "cpa-desktop")
 
-	cli := dialRole(t, srv.URL, "key-disc", RoleClient, "cli-1", "Client 1")
+	cli := dialRole(t, hub, srv.URL, "key-disc", RoleClient, "cli-1", "Client 1")
 	initial := readTextJSONFrame(t, cli)
 	if initial.Get("type").String() != ControlTypeServerList ||
 		initial.Get("servers.#").Int() != 2 ||
@@ -136,7 +163,7 @@ func TestHubExchange_DiscoveryEventsAndControlCommands(t *testing.T) {
 	}
 
 	// Dynamic server_online push when srv-c joins with arbitrary custom type.
-	srvC := dialRoleWithType(t, srv.URL, "key-disc", RoleServer, "srv-c", "Server C", "GPU 节点 🚀")
+	srvC := dialRoleWithType(t, hub, srv.URL, "key-disc", RoleServer, "srv-c", "Server C", "GPU 节点 🚀")
 	online := readTextJSONFrame(t, cli)
 	if online.Get("type").String() != ControlTypeServerOnline ||
 		online.Get("server.uuid").String() != "srv-c" ||
@@ -184,7 +211,7 @@ func TestHubExchange_InvalidUTF8ControlNeverExecutesListServers(t *testing.T) {
 	t.Cleanup(hub.Close)
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
-	client := dialRole(t, srv.URL, "key", RoleClient, "client", "Client")
+	client := dialRole(t, hub, srv.URL, "key", RoleClient, "client", "Client")
 	_ = readTextJSONFrame(t, client)
 	for _, tc := range []struct {
 		name string
@@ -225,13 +252,13 @@ func TestHubExchange_ManyToManyFullDuplexMultiplexing(t *testing.T) {
 	servers := make([]*websocket.Conn, numPeers)
 	serverWriteMu := make([]sync.Mutex, numPeers)
 	for s := 0; s < numPeers; s++ {
-		servers[s] = dialRole(t, srv.URL, "key-mesh", RoleServer, fmt.Sprintf("srv-%d", s), fmt.Sprintf("Server %d", s))
+		servers[s] = dialRole(t, hub, srv.URL, "key-mesh", RoleServer, fmt.Sprintf("srv-%d", s), fmt.Sprintf("Server %d", s))
 	}
 
 	clients := make([]*websocket.Conn, numPeers)
 	clientWriteMu := make([]sync.Mutex, numPeers)
 	for c := 0; c < numPeers; c++ {
-		clients[c] = dialRole(t, srv.URL, "key-mesh", RoleClient, fmt.Sprintf("cli-%d", c), fmt.Sprintf("Client %d", c))
+		clients[c] = dialRole(t, hub, srv.URL, "key-mesh", RoleClient, fmt.Sprintf("cli-%d", c), fmt.Sprintf("Client %d", c))
 		initList := readTextJSONFrame(t, clients[c])
 		if initList.Get("servers.#").Int() != numPeers {
 			t.Fatalf("client %d saw %d servers, want %d", c, initList.Get("servers.#").Int(), numPeers)
@@ -394,10 +421,10 @@ func TestHubExchange_SecurityGuardsAndBackpressureIsolation(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 
-	srvSlow := dialRole(t, srv.URL, "key-sec", RoleServer, "srv-slow", "Slow Server")
-	srvFast := dialRole(t, srv.URL, "key-sec", RoleServer, "srv-fast", "Fast Server")
-	cli1 := dialRole(t, srv.URL, "key-sec", RoleClient, "cli-1", "Client 1")
-	cli2 := dialRole(t, srv.URL, "key-sec", RoleClient, "cli-2", "Client 2")
+	srvSlow := dialRole(t, hub, srv.URL, "key-sec", RoleServer, "srv-slow", "Slow Server")
+	srvFast := dialRole(t, hub, srv.URL, "key-sec", RoleServer, "srv-fast", "Fast Server")
+	cli1 := dialRole(t, hub, srv.URL, "key-sec", RoleClient, "cli-1", "Client 1")
+	cli2 := dialRole(t, hub, srv.URL, "key-sec", RoleClient, "cli-2", "Client 2")
 	_ = readTextJSONFrame(t, cli1)
 	_ = readTextJSONFrame(t, cli2)
 
@@ -496,11 +523,11 @@ func TestHubExchange_ControllablePingAndKeyRevocation(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 
-	cliRevoke := dialRole(t, srv.URL, "key-revoke", RoleClient, "c-rev", "Revoke Client")
+	cliRevoke := dialRole(t, hub, srv.URL, "key-revoke", RoleClient, "c-rev", "Revoke Client")
 	_ = readTextJSONFrame(t, cliRevoke)
 
-	srvKeep := dialRole(t, srv.URL, "key-keep", RoleServer, "s-keep", "Keep Server")
-	cliKeep := dialRole(t, srv.URL, "key-keep", RoleClient, "c-keep", "Keep Client")
+	srvKeep := dialRole(t, hub, srv.URL, "key-keep", RoleServer, "s-keep", "Keep Server")
+	cliKeep := dialRole(t, hub, srv.URL, "key-keep", RoleClient, "c-keep", "Keep Client")
 	_ = readTextJSONFrame(t, cliKeep)
 
 	pingReceived := make(chan struct{}, 4)
