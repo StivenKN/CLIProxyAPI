@@ -32,6 +32,19 @@ func (w *Watcher) start(ctx context.Context) error {
 		return errAddConfig
 	}
 	log.Debugf("watching config file: %s", w.configPath)
+	// Editors and atomic writers save by replacing the file (rename or remove,
+	// then create), which drops the file watch above. Watching the directory
+	// keeps reloads working after such a save; handleEvent filters by name.
+	// The file watch stays so a symlinked config still sees in-place edits of
+	// its target. On kqueue (macOS/BSD) this opens one fd per directory entry,
+	// and fails on entries it can't open (e.g. a dangling symlink); then keep
+	// the file-only watch rather than refuse to start.
+	configDir := w.configDir()
+	if errAddConfigDir := w.watcher.Add(configDir); errAddConfigDir != nil {
+		log.Warnf("failed to watch config directory %s, config reload may stop after an atomic save: %v", configDir, errAddConfigDir)
+	} else {
+		log.Debugf("watching config directory: %s", configDir)
+	}
 
 	w.watchMu.Lock()
 	authDir := w.currentAuthDir()
@@ -65,7 +78,9 @@ func (w *Watcher) syncAuthDirWatch() {
 	if oldWatched == target {
 		return
 	}
-	if oldWatched != "" && !w.sameNormalizedAuthPath(oldWatched, w.configPath) && !w.sameNormalizedAuthPath(oldWatched, target) {
+	// Never drop a directory that is also the config directory: fsnotify keeps one
+	// watch per path, so removing it would stop config hot reload.
+	if oldWatched != "" && !w.sameNormalizedAuthPath(oldWatched, w.configDir()) && !w.sameNormalizedAuthPath(oldWatched, target) {
 		if errRemove := w.watcher.Remove(oldWatched); errRemove != nil {
 			log.Debugf("failed to remove previous auth directory watch %s: %v", oldWatched, errRemove)
 		}
@@ -85,6 +100,11 @@ func (w *Watcher) syncAuthDirWatch() {
 	}
 	w.watchedAuthDir = target
 	log.Debugf("watching auth directory: %s", target)
+}
+
+// configDir returns the directory watched for atomic replacements of the config file.
+func (w *Watcher) configDir() string {
+	return filepath.Dir(w.configPath)
 }
 
 func (w *Watcher) processEvents(ctx context.Context) {
