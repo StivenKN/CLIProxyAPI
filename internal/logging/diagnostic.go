@@ -46,6 +46,23 @@ func SafeDiagnosticForLog(message string) string {
 	return truncateDiagnosticLogExcerpt(excerpt, sourceTruncated)
 }
 
+// SafeErrorForLog returns err's log-safe text: its LogDiagnostic() when it
+// provides one (some errors carry raw upstream bodies in Error()), else
+// Error(), sanitized by SafeDiagnosticForLog.
+func SafeErrorForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	diagnostic := err.Error()
+	var diagnosticErr interface{ LogDiagnostic() string }
+	if errors.As(err, &diagnosticErr) && diagnosticErr != nil {
+		if marked := strings.TrimSpace(diagnosticErr.LogDiagnostic()); marked != "" {
+			diagnostic = marked
+		}
+	}
+	return SafeDiagnosticForLog(diagnostic)
+}
+
 // SafeErrorDiagnostic extracts only allowlisted failure signals from an
 // arbitrary error. It never carries the original free-form error text.
 func SafeErrorDiagnostic(err error) string {
