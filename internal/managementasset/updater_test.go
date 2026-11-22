@@ -134,3 +134,14 @@ func TestAutoUpdateSkipReason(t *testing.T) {
 		})
 	}
 }
+
+// With no repository configured, or the default one, the panel comes from this
+// fork's panel releases, not upstream's.
+func TestDefaultPanelReleaseIsThisForksPanel(t *testing.T) {
+	const want = "https://api.github.com/repos/StivenKN/Cli-Proxy-API-Management-Center/releases/latest"
+	for _, repo := range []string{"", config.DefaultPanelGitHubRepository} {
+		if got := resolveReleaseURL(repo); got != want {
+			t.Errorf("resolveReleaseURL(%q) = %q, want %q", repo, got, want)
+		}
+	}
+}
