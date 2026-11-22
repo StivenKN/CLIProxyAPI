@@ -194,6 +194,9 @@ func TestConvertClaudeResponseToGemini_MaxTokensTruncatedToolCall(t *testing.T) 
 		if args := ojson.GetBytesNoCopy(chunks[0], "candidates.0.content.parts.0.functionCall.args").Raw; args != "{}" {
 			t.Fatalf("functionCall.args = %s, want {}", args)
 		}
+		if got := ojson.GetBytesNoCopy(chunks[0], "candidates.0.finishReason"); got.Exists() {
+			t.Fatalf("function call chunk finishReason = %s, want none; chunk=%s", got.Raw, chunks[0])
+		}
 		if got := ojson.GetBytesNoCopy(chunks[1], "candidates.0.finishReason").String(); got != "MAX_TOKENS" {
 			t.Fatalf("finishReason = %q, want MAX_TOKENS; chunk=%s", got, chunks[1])
 		}

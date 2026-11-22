@@ -209,7 +209,7 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 				_ = fcDoc.Set("functionCall.id", toolID)
 			}
 			_ = templateDoc.SetRawBytes("candidates.0.content.parts.-1", fcDoc.Bytes())
-			_ = templateDoc.Set("candidates.0.finishReason", "STOP")
+			// No finishReason here: message_delta reports the real one (e.g. MAX_TOKENS).
 			outBytes := templateDoc.Bytes()
 			(*param).(*ConvertAnthropicResponseToGeminiParams).LastStorageOutput = append([]byte(nil), outBytes...)
 			// cleanup used state for this index
