@@ -180,3 +180,44 @@ func TestReloadConfigIfChangedReloadsAfterWriteBetweenHashAndLoad_Issue6631(t *t
 		t.Fatalf("applied request-retry values = %v, want %v", applied, want)
 	}
 }
+
+func TestReloadConfigIfChangedIgnoresFileTruncatedBeforeLoad(t *testing.T) {
+	configPath, authDir := newIssue6631ConfigFile(t)
+	if errWrite := writeIssue6631Config(configPath, authDir, 1); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+
+	originalLoad := loadConfigFileFunc
+	t.Cleanup(func() { loadConfigFileFunc = originalLoad })
+	var errTruncate error
+	loads := 0
+	loadConfigFileFunc = func(path string) (*config.Config, error) {
+		loads++
+		if loads == 1 {
+			// A management save has truncated the file but not written it yet.
+			errTruncate = os.Truncate(configPath, 0)
+		}
+		return originalLoad(path)
+	}
+
+	var applied []int
+	w := &Watcher{
+		configPath:     configPath,
+		authDir:        authDir,
+		reloadCallback: func(cfg *config.Config) { applied = append(applied, cfg.RequestRetry) },
+	}
+
+	w.ReloadConfigIfChanged()
+	if errTruncate != nil {
+		t.Fatal(errTruncate)
+	}
+	// The save finishes writing the same content.
+	if errWrite := writeIssue6631Config(configPath, authDir, 1); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	w.ReloadConfigIfChanged()
+
+	if want := []int{1}; !reflect.DeepEqual(applied, want) {
+		t.Fatalf("applied request-retry values = %v, want %v", applied, want)
+	}
+}
