@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Manual catalog refresh: copies models.json and codex_client_models.json from a
+# models repository into internal/registry/models for review in a PR. CI builds
+# and running proxies only use the catalogs committed to this repo's main.
 set -euo pipefail
 
 models_repository="${MODELS_REPOSITORY_URL:-https://github.com/router-for-me/models.git}"

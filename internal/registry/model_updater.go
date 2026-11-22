@@ -16,9 +16,10 @@ import (
 // ModelsRefreshInterval is the shared cadence for model catalogs and account entitlements.
 const ModelsRefreshInterval = 3 * time.Hour
 
+// modelsURLs serves the catalog committed to this fork's main branch, so a catalog
+// change reaches running proxies only through a reviewed PR.
 var modelsURLs = []string{
-	"https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/models.json",
-	"https://models.router-for.me/models.json",
+	"https://raw.githubusercontent.com/StivenKN/CLIProxyAPI/main/internal/registry/models/models.json",
 }
 
 //go:embed models/models.json
