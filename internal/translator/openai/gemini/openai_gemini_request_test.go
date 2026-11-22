@@ -533,3 +533,37 @@ func TestConvertGeminiRequestToOpenAI_DefaultsOmittedContentRoleToUser(t *testin
 		t.Fatalf("messages[3].role = %q, want tool; out=%s", got, string(out))
 	}
 }
+
+func TestConvertGeminiRequestToOpenAI_LowercasesGeminiSchemaTypes(t *testing.T) {
+	inputJSON := []byte(`{
+		"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+		"tools": [{"functionDeclarations": [{
+			"name": "lookup",
+			"parameters": {
+				"type": "OBJECT",
+				"properties": {
+					"query": {"type": "STRING", "enum": ["OBJECT"]},
+					"tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+					"type": {"type": "INTEGER", "default": "NUMBER"}
+				}
+			}
+		}]}]
+	}`)
+
+	out, _ := ConvertGeminiRequestToOpenAI("gpt-test", inputJSON, false)
+	params := ojson.GetBytesNoCopy(out, "tools.0.function.parameters")
+
+	for path, want := range map[string]string{
+		"type":                       "object",
+		"properties.query.type":      "string",
+		"properties.query.enum.0":    "OBJECT",
+		"properties.tags.type":       "array",
+		"properties.tags.items.type": "string",
+		"properties.type.type":       "integer",
+		"properties.type.default":    "NUMBER",
+	} {
+		if got := params.Get(path).String(); got != want {
+			t.Errorf("%s = %q, want %q; parameters=%s", path, got, want, params.Raw)
+		}
+	}
+}
