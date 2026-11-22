@@ -8,9 +8,10 @@ import (
 
 const maxDevinModelsSize = 8 << 20
 
+// devinModelsURLs serves the catalog committed to this fork's main branch, so a catalog
+// change reaches running proxies only through a reviewed PR.
 var devinModelsURLs = []string{
-	"https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json",
-	"https://models.router-for.me/devin_models.json",
+	"https://raw.githubusercontent.com/StivenKN/CLIProxyAPI/main/internal/registry/models/devin_models.json",
 }
 
 // StartDevinModelsUpdater starts a background updater that fetches the

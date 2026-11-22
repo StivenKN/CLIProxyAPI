@@ -17,8 +17,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # Vet and test the committed model catalog: the refresh below replaces the
-      # embedded catalog files with whatever router-for-me/models has on main.
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -26,8 +24,6 @@ jobs:
       # Some concurrency regression tests only fail under the race detector.
       - name: Test with race detector
         run: go test -race ./internal/runtime/executor/... ./sdk/cliproxy/... ./internal/wsrelay/... ./internal/config/...
-      - name: Refresh models catalog
-        run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Build
         run: |
           go build -o test-output ./cmd/server
