@@ -201,7 +201,8 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 			if name != "" {
 				_ = fcDoc.Set("functionCall.name", name)
 			}
-			if argsTrim != "" {
+			// Args cut off by max_tokens are partial JSON; keep the template's {} instead.
+			if ojson.Valid(argsTrim) && ojson.Parse(argsTrim).IsObject() {
 				_ = fcDoc.SetRaw("functionCall.args", argsTrim)
 			}
 			if toolID != "" {
@@ -227,22 +228,7 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 
 	case "message_delta":
 		// Handle message-level changes (like stop reason and usage information)
-		if delta := root.Get("delta"); delta.Exists() {
-			if stopReason := delta.Get("stop_reason"); stopReason.Exists() {
-				switch stopReason.String() {
-				case "end_turn":
-					_ = templateDoc.Set("candidates.0.finishReason", "STOP")
-				case "tool_use":
-					_ = templateDoc.Set("candidates.0.finishReason", "STOP")
-				case "max_tokens":
-					_ = templateDoc.Set("candidates.0.finishReason", "MAX_TOKENS")
-				case "stop_sequence":
-					_ = templateDoc.Set("candidates.0.finishReason", "STOP")
-				default:
-					_ = templateDoc.Set("candidates.0.finishReason", "STOP")
-				}
-			}
-		}
+		_ = templateDoc.Set("candidates.0.finishReason", geminiFinishReason(root.Get("delta.stop_reason").String()))
 
 		if usage := root.Get("usage"); usage.Exists() {
 			// Basic token counts for prompt and completion
@@ -273,7 +259,6 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 			// Set traffic type (required by Gemini API)
 			_ = templateDoc.Set("usageMetadata.trafficType", "PROVISIONED_THROUGHPUT")
 		}
-		_ = templateDoc.Set("candidates.0.finishReason", "STOP")
 
 		return [][]byte{templateDoc.Bytes()}
 	case "message_stop":
@@ -468,7 +453,8 @@ func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string,
 				if name != "" {
 					_ = fcDoc.Set("functionCall.name", name)
 				}
-				if argsTrim != "" {
+				// Args cut off by max_tokens are partial JSON; keep the template's {} instead.
+				if ojson.Valid(argsTrim) && ojson.Parse(argsTrim).IsObject() {
 					_ = fcDoc.SetRaw("functionCall.args", argsTrim)
 				}
 				if toolID != "" {
@@ -488,7 +474,10 @@ func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string,
 			}
 
 		case "message_delta":
-			// Extract final usage information using sjson for token counts and metadata
+			if stopReason := root.Get("delta.stop_reason"); stopReason.Exists() {
+				_ = templateDoc.Set("candidates.0.finishReason", geminiFinishReason(stopReason.String()))
+			}
+			// Extract final usage information for token counts and metadata
 			if usage := root.Get("usage"); usage.Exists() {
 				usageDoc := ojson.NewDoc([]byte(`{}`))
 
@@ -547,6 +536,14 @@ func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string,
 	}
 
 	return templateDoc.Bytes()
+}
+
+// geminiFinishReason maps a Claude stop_reason to a Gemini finishReason.
+func geminiFinishReason(stopReason string) string {
+	if stopReason == "max_tokens" {
+		return "MAX_TOKENS"
+	}
+	return "STOP"
 }
 
 func GeminiTokenCount(ctx context.Context, count int64) []byte {

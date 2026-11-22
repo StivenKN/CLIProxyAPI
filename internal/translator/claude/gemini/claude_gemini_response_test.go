@@ -164,3 +164,51 @@ func TestConvertClaudeResponseToGeminiNonStream_ThinkingSignature(t *testing.T) 
 		})
 	}
 }
+
+// A tool call cut off by max_tokens leaves partial input JSON behind; both paths
+// must still emit valid JSON and report MAX_TOKENS.
+func TestConvertClaudeResponseToGemini_MaxTokensTruncatedToolCall(t *testing.T) {
+	ctx := context.Background()
+	events := []string{
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-5"}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup"}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"sta"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"input_tokens":10,"output_tokens":20}}`,
+	}
+
+	t.Run("stream", func(t *testing.T) {
+		var param any
+		var chunks [][]byte
+		for _, event := range events {
+			chunks = append(chunks, ConvertClaudeResponseToGemini(ctx, "gemini-2.5-pro", nil, nil, []byte(event), &param)...)
+		}
+		for _, chunk := range chunks {
+			if !ojson.ValidBytes(chunk) {
+				t.Fatalf("chunk is not valid JSON: %s", chunk)
+			}
+		}
+		if len(chunks) != 2 {
+			t.Fatalf("expected 2 chunks, got %d", len(chunks))
+		}
+		if args := ojson.GetBytesNoCopy(chunks[0], "candidates.0.content.parts.0.functionCall.args").Raw; args != "{}" {
+			t.Fatalf("functionCall.args = %s, want {}", args)
+		}
+		if got := ojson.GetBytesNoCopy(chunks[1], "candidates.0.finishReason").String(); got != "MAX_TOKENS" {
+			t.Fatalf("finishReason = %q, want MAX_TOKENS; chunk=%s", got, chunks[1])
+		}
+	})
+
+	t.Run("non-stream", func(t *testing.T) {
+		out := ConvertClaudeResponseToGeminiNonStream(ctx, "gemini-2.5-pro", nil, nil, []byte(strings.Join(events, "\n")), nil)
+		if !ojson.ValidBytes(out) {
+			t.Fatalf("output is not valid JSON: %s", out)
+		}
+		if got := ojson.GetBytesNoCopy(out, "candidates.0.finishReason").String(); got != "MAX_TOKENS" {
+			t.Fatalf("finishReason = %q, want MAX_TOKENS; out=%s", got, out)
+		}
+		if got := ojson.GetBytesNoCopy(out, "usageMetadata.candidatesTokenCount").Int(); got != 20 {
+			t.Fatalf("candidatesTokenCount = %d, want 20; out=%s", got, out)
+		}
+	})
+}
