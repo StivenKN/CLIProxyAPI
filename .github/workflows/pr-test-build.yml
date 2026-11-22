@@ -23,6 +23,9 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      # Some concurrency regression tests only fail under the race detector.
+      - name: Test with race detector
+        run: go test -race ./internal/runtime/executor/... ./sdk/cliproxy/... ./internal/wsrelay/... ./internal/config/...
       - name: Refresh models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Build
