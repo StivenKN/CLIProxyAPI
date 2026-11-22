@@ -83,7 +83,7 @@ func TestHubAuth_PreRevocationHandshakeCannotCommitAfterKeyIsReadded(t *testing.
 	hub.UpdateAllowedAPIKeys([]string{"key"})
 
 	// The new connection must succeed while the stale handshake is still paused.
-	current := dialRole(t, srv.URL, "key", RoleClient, "device", "Current")
+	current := dialRole(t, hub, srv.URL, "key", RoleClient, "device", "Current")
 	_ = readTextJSONFrame(t, current)
 	currentPeer := lookupTunnelPeer(t, hub, "key", "device")
 	resumeHandshake()
