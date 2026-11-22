@@ -333,10 +333,10 @@ func ConvertGeminiRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 					// Convert parameters schema
 					if parameters := funcDecl.Get("parameters"); parameters.Exists() {
 						normalizedParams := util.NormalizeJSONSchemaNumericConstraints(parameters.Raw)
-						_ = openAIToolDoc.SetRaw("function.parameters", normalizedParams)
+						_ = openAIToolDoc.SetRaw("function.parameters", lowercaseSchemaTypes(normalizedParams))
 					} else if parameters := funcDecl.Get("parametersJsonSchema"); parameters.Exists() {
 						normalizedParams := util.NormalizeJSONSchemaNumericConstraints(parameters.Raw)
-						_ = openAIToolDoc.SetRaw("function.parameters", normalizedParams)
+						_ = openAIToolDoc.SetRaw("function.parameters", lowercaseSchemaTypes(normalizedParams))
 					}
 
 					toolItems = append(toolItems, openAIToolDoc.Bytes())
@@ -527,4 +527,31 @@ func openAIFileNameFromMIME(mimeType string) string {
 		}
 		return "document"
 	}
+}
+
+// lowercaseSchemaTypes converts Gemini-style schema types ("OBJECT", "STRING")
+// to the lowercase JSON Schema types OpenAI-compatible upstreams require.
+// Literal values (enum, default, const, ...) are left untouched.
+func lowercaseSchemaTypes(schema string) string {
+	var paths []string
+	util.WalkSchema(ojson.Parse(schema), "", "type", &paths)
+	var doc *ojson.Doc
+	for _, path := range paths {
+		typeValue := ojson.Get(schema, path)
+		if typeValue.Type != ojson.String {
+			continue
+		}
+		lower := strings.ToLower(typeValue.String())
+		if lower == typeValue.String() {
+			continue
+		}
+		if doc == nil {
+			doc = ojson.NewDocString(schema)
+		}
+		_ = doc.Set(path, lower)
+	}
+	if doc == nil {
+		return schema
+	}
+	return doc.String()
 }
