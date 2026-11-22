@@ -4647,16 +4647,16 @@ func TestIssue7149_CleanJSONSchemaForGeminiJSONSchemaNormalizesNumericConstraint
 	}
 }
 
-// Property names with path syntax ("a|b", `a\b`, "a#b", "@keys") must be
+// Property names with path syntax ("a|b", `a\b`, "a#b", "@keys", ":x", "[x]") must be
 // cleaned like plain names; unescaped, the cleaner rewrote the wrong path and
 // sent the type array, format and minLength upstream unchanged.
 func TestCleanJSONSchemaForGemini_PathSyntaxPropertyNames(t *testing.T) {
-	for _, key := range []string{"a|b", `a\\b`, "a#b", "@keys"} {
+	for _, key := range []string{"a|b", `a\\b`, "a#b", "@keys", ":x", "[x]", "{x}"} {
 		input := `{"type":"object","properties":{"` + key + `":{"type":["string","null"],"format":"email","minLength":2}}}`
 		got := ojson.Parse(CleanJSONSchemaForGemini(input)).Get("properties")
 		var prop ojson.Result
 		got.ForEach(func(_, value ojson.Result) bool { prop = value; return false })
-		if prop.Get("type").String() != "string" || prop.Get("format").Exists() || prop.Get("minLength").Exists() {
+		if len(got.Map()) != 1 || prop.Get("type").String() != "string" || prop.Get("format").Exists() || prop.Get("minLength").Exists() {
 			t.Errorf("key %s not cleaned: %s", key, got.Raw)
 		}
 	}

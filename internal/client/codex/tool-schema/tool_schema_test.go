@@ -420,7 +420,7 @@ func TestNormalizeCodexToolSchemasPathSyntaxPropertyNames(t *testing.T) {
 		branches = append(branches, `{"const":"v`+strconv.Itoa(i)+`"}`)
 	}
 	union := `{"anyOf":[` + strings.Join(branches, ",") + `]}`
-	for _, key := range []string{"ab", "a|b", "a#b", "@keys"} {
+	for _, key := range []string{"ab", "a|b", "a#b", "@keys", ":x", "[x]", "{x}"} {
 		body := []byte(`{"tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"` + key + `":` + union + `}}}]}`)
 		prop := ojson.GetBytes(NormalizeCodexToolSchemas(body), "tools.0.parameters.properties").Map()[key]
 		if !prop.Get("enum").IsArray() || prop.Get("anyOf").Exists() {

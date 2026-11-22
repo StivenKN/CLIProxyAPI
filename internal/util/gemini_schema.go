@@ -14,9 +14,8 @@ import (
 )
 
 // gjsonPathKeyReplacer escapes every byte with path meaning inside one key
-// segment. It leaves '$' alone because callers compare escaped segments with
-// literal "$ref"/"$defs" keys.
-var gjsonPathKeyReplacer = strings.NewReplacer(`\`, `\\`, ".", `\.`, "*", `\*`, "?", `\?`, "|", `\|`, "#", `\#`, "@", `\@`)
+// segment. '$' has none in ojson paths, so "$ref"/"$defs" stay literal.
+var gjsonPathKeyReplacer = strings.NewReplacer(`\`, `\\`, ".", `\.`, "*", `\*`, "?", `\?`, "|", `\|`, "#", `\#`, "@", `\@`, ":", `\:`, "[", `\[`, "{", `\{`)
 
 const placeholderReasonDescription = "Brief explanation of why you are calling this tool"
 
@@ -2648,7 +2647,7 @@ func orDefault(val, def string) string {
 }
 
 func escapeGJSONPathKey(key string) string {
-	if strings.IndexAny(key, `\.*?|#@`) == -1 {
+	if strings.IndexAny(key, `\.*?|#@:[{`) == -1 {
 		return key
 	}
 	return gjsonPathKeyReplacer.Replace(key)
