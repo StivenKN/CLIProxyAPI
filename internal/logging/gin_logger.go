@@ -89,7 +89,7 @@ func GinLogrusLogger() gin.HandlerFunc {
 		statusCode := c.Writer.Status()
 		clientIP := c.ClientIP()
 		method := c.Request.Method
-		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
+		errorMessage := accessLogErrorMessage(c.Errors.ByType(gin.ErrorTypePrivate))
 
 		if requestID == "" {
 			requestID = "--------"
@@ -179,4 +179,14 @@ func creditsUsed(c *gin.Context) bool {
 	}
 	flag, ok := val.(bool)
 	return ok && flag
+}
+
+// accessLogErrorMessage joins the request's errors for the access log line,
+// on one line, bounded, and with credentials redacted.
+func accessLogErrorMessage(errs []*gin.Error) string {
+	parts := make([]string, 0, len(errs))
+	for _, e := range errs {
+		parts = append(parts, e.Error())
+	}
+	return SafeDiagnosticForLog(strings.Join(parts, "; "))
 }
