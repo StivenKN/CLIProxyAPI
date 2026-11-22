@@ -2244,3 +2244,129 @@ func TestConcurrentSetConfigKeepsWatchedAuthDirOnLatestConfig(t *testing.T) {
 		t.Fatal("timed out waiting for fsnotify update from dirC")
 	}
 }
+
+// An atomic save (rename the old file away, write a new one) must not end hot
+// reload: both that save and every later change have to reach the callback.
+func TestConfigReloadSurvivesAtomicSave(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeConfig := func(path string, port int) {
+		t.Helper()
+		data := fmt.Sprintf("port: %d\nauth-dir: %s\n", port, authDir)
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+	}
+	writeConfig(configPath, 1000)
+
+	ports := make(chan int, 16)
+	w, err := NewWatcher(configPath, authDir, func(cfg *config.Config) { ports <- cfg.Port })
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+	w.SetConfig(&config.Config{Port: 1000, AuthDir: authDir})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("failed to start watcher: %v", err)
+	}
+	defer func() { _ = w.Stop() }()
+
+	waitForPort := func(want int) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case got := <-ports:
+				if got == want {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for reload with port %d", want)
+			}
+		}
+	}
+	waitForPort(1000) // Initial load from Start.
+
+	// Vim-style save: move the original away, then write a new file in its place.
+	if err := os.Rename(configPath, configPath+"~"); err != nil {
+		t.Fatalf("failed to rename config away: %v", err)
+	}
+	writeConfig(configPath, 1001)
+	waitForPort(1001)
+
+	// A later in-place write must still be seen.
+	writeConfig(configPath, 1002)
+	waitForPort(1002)
+
+	// So must a rename over the config (mv, sed -i, most atomic writers).
+	tmpPath := filepath.Join(tmpDir, "config.yaml.tmp")
+	writeConfig(tmpPath, 1003)
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		t.Fatalf("failed to rename new config into place: %v", err)
+	}
+	waitForPort(1003)
+}
+
+// When the auth dir starts as the config dir, moving auth-dir elsewhere must not
+// drop the shared directory watch that config hot reload depends on.
+func TestConfigReloadSurvivesAuthDirMovingOffConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	newAuthDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(newAuthDir, 0o755); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	saveConfig := func(port int, authDir string) {
+		t.Helper()
+		tmpPath := configPath + ".tmp"
+		data := fmt.Sprintf("port: %d\nauth-dir: %s\n", port, authDir)
+		if err := os.WriteFile(tmpPath, []byte(data), 0o644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+		if err := os.Rename(tmpPath, configPath); err != nil {
+			t.Fatalf("failed to rename config into place: %v", err)
+		}
+	}
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("port: 2000\nauth-dir: %s\n", tmpDir)), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	ports := make(chan int, 16)
+	w, err := NewWatcher(configPath, tmpDir, func(cfg *config.Config) { ports <- cfg.Port })
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+	w.SetConfig(&config.Config{Port: 2000, AuthDir: tmpDir})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("failed to start watcher: %v", err)
+	}
+	defer func() { _ = w.Stop() }()
+
+	waitForPort := func(want int) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case got := <-ports:
+				if got == want {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for reload with port %d", want)
+			}
+		}
+	}
+	waitForPort(2000)
+
+	saveConfig(2001, newAuthDir) // Re-points the auth-dir watch away from tmpDir.
+	waitForPort(2001)
+	saveConfig(2002, newAuthDir)
+	waitForPort(2002)
+}
