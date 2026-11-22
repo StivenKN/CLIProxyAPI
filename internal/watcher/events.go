@@ -36,13 +36,15 @@ func (w *Watcher) start(ctx context.Context) error {
 	// then create), which drops the file watch above. Watching the directory
 	// keeps reloads working after such a save; handleEvent filters by name.
 	// The file watch stays so a symlinked config still sees in-place edits of
-	// its target. On kqueue (macOS/BSD) this opens one fd per directory entry.
+	// its target. On kqueue (macOS/BSD) this opens one fd per directory entry,
+	// and fails on entries it can't open (e.g. a dangling symlink); then keep
+	// the file-only watch rather than refuse to start.
 	configDir := w.configDir()
 	if errAddConfigDir := w.watcher.Add(configDir); errAddConfigDir != nil {
-		log.Errorf("failed to watch config directory %s: %v", configDir, errAddConfigDir)
-		return errAddConfigDir
+		log.Warnf("failed to watch config directory %s, config reload may stop after an atomic save: %v", configDir, errAddConfigDir)
+	} else {
+		log.Debugf("watching config directory: %s", configDir)
 	}
-	log.Debugf("watching config directory: %s", configDir)
 
 	w.watchMu.Lock()
 	authDir := w.currentAuthDir()

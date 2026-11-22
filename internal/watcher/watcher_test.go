@@ -2370,3 +2370,32 @@ func TestConfigReloadSurvivesAuthDirMovingOffConfigDir(t *testing.T) {
 	saveConfig(2002, newAuthDir)
 	waitForPort(2002)
 }
+
+// A config directory the watcher can't fully open (kqueue fails on a dangling
+// symlink) must not stop the watcher from starting.
+func TestWatcherStartsWhenConfigDirHasDanglingSymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("port: 3000\nauth-dir: %s\n", authDir)), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(tmpDir, "missing"), filepath.Join(tmpDir, "dangling")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	w, err := NewWatcher(configPath, authDir, func(*config.Config) {})
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+	w.SetConfig(&config.Config{Port: 3000, AuthDir: authDir})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("watcher failed to start: %v", err)
+	}
+	_ = w.Stop()
+}
