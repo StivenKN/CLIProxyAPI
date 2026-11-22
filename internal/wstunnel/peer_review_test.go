@@ -119,6 +119,15 @@ func lookupTunnelPeer(t *testing.T, hub *Hub, key, uuid string) *peer {
 	return tenant.peers[uuid]
 }
 
+// waitTunnelWriterIdle waits until p's writer releases the socket after its
+// last write. The client can read a frame before the writer unlocks, and a
+// protocol error that finds the writer busy closes the socket without a
+// Close frame by design, so tests expecting 1002 must start from idle.
+func waitTunnelWriterIdle(p *peer) {
+	p.writeMu.Lock()
+	p.writeMu.Unlock()
+}
+
 func assertTunnelClose(t *testing.T, conn *websocket.Conn, code int) {
 	t.Helper()
 	_, _, errRead := readTunnelTestMessage(conn)
