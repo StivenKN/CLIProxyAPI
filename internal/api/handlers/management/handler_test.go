@@ -86,3 +86,21 @@ func TestMiddlewareSetsSupportPluginHeader(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthenticateManagementKey_MissingKeyDoesNotBan(t *testing.T) {
+	h := &Handler{
+		cfg:            &config.Config{},
+		failedAttempts: make(map[string]*attemptInfo),
+		envSecret:      "test-secret",
+	}
+
+	for i := 0; i < 10; i++ {
+		if _, statusCode, errMsg := h.AuthenticateManagementKey("127.0.0.1", true, ""); statusCode != http.StatusUnauthorized || errMsg != "missing management key" {
+			t.Fatalf("keyless attempt %d: status=%d msg=%q", i+1, statusCode, errMsg)
+		}
+	}
+
+	if allowed, statusCode, errMsg := h.AuthenticateManagementKey("127.0.0.1", true, "test-secret"); !allowed {
+		t.Fatalf("correct key denied after keyless requests: status=%d msg=%q", statusCode, errMsg)
+	}
+}

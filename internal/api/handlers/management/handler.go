@@ -428,8 +428,9 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
 		return false, http.StatusForbidden, "remote management key not set"
 	}
 
+	// A request without a key guesses nothing, so it doesn't count toward the
+	// ban; counting it let any keyless local caller lock the owner out.
 	if provided == "" {
-		fail()
 		return false, http.StatusUnauthorized, "missing management key"
 	}
 
