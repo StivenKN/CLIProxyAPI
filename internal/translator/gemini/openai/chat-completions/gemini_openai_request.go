@@ -246,7 +246,7 @@ func convertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 						partDoc := ojson.NewDocString(`{"functionCall":{"name":""}}`)
 						_ = partDoc.Set("functionCall.name", functionName)
 						// Gemini requires args to be an object; empty or malformed history arguments become {}.
-						if args := tc.Get("function.arguments").String(); ojson.Parse(args).IsObject() {
+						if args := tc.Get("function.arguments").String(); ojson.Valid(args) && ojson.Parse(args).IsObject() {
 							_ = partDoc.SetRaw("functionCall.args", args)
 						} else {
 							_ = partDoc.SetRaw("functionCall.args", "{}")

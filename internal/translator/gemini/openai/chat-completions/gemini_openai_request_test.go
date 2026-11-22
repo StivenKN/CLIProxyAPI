@@ -1259,7 +1259,7 @@ func TestConvertOpenAIRequestToGemini_MixedBuiltinToolsAndFunctions(t *testing.T
 }
 
 func TestConvertOpenAIRequestToGemini_NonObjectToolCallArgumentsBecomeEmptyObject(t *testing.T) {
-	for _, args := range []string{``, `not json`, `[1,2]`} {
+	for _, args := range []string{``, `not json`, `[1,2]`, `{"query":"sta`} {
 		inputJSON := ojson.NewDocString(`{"messages":[
 			{"role":"user","content":"hi"},
 			{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"ping","arguments":""}}]},
