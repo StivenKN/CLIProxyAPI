@@ -46,10 +46,7 @@ func walk(value ojson.Result, path, field string, paths *[]string, schemaAware b
 		// For JSON objects and arrays, iterate through each child
 		value.ForEach(func(key, val ojson.Result) bool {
 			var childPath string
-			// Escape special characters for gjson/sjson path syntax
-			// . -> \.
-			// * -> \*
-			// ? -> \?
+			// Escape path syntax in the key so it stays one literal segment.
 			keyStr := key.String()
 			safeKey := escapeGJSONPathKey(keyStr)
 
