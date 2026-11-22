@@ -1257,3 +1257,24 @@ func TestConvertOpenAIRequestToGemini_MixedBuiltinToolsAndFunctions(t *testing.T
 		t.Fatalf("includeServerSideToolInvocations must only be set for mixed tools, got: %s", out)
 	}
 }
+
+func TestConvertOpenAIRequestToGemini_NonObjectToolCallArgumentsBecomeEmptyObject(t *testing.T) {
+	for _, args := range []string{``, `not json`, `[1,2]`, `{"query":"sta`} {
+		inputJSON := ojson.NewDocString(`{"messages":[
+			{"role":"user","content":"hi"},
+			{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"ping","arguments":""}}]},
+			{"role":"tool","tool_call_id":"call_1","content":"pong"}
+		]}`)
+		_ = inputJSON.Set("messages.1.tool_calls.0.function.arguments", args)
+
+		result, _ := ConvertOpenAIRequestToGemini("gemini-3-flash", inputJSON.Bytes(), false)
+
+		if !ojson.Valid(string(result)) {
+			t.Fatalf("args %q: output is not valid JSON: %s", args, result)
+		}
+		got := ojson.ParseBytes(result).Get("contents.1.parts.0.functionCall.args")
+		if got.Raw != "{}" {
+			t.Fatalf("args %q: functionCall.args = %s, want {}; output: %s", args, got.Raw, result)
+		}
+	}
+}
