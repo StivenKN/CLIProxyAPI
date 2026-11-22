@@ -8,9 +8,10 @@ import (
 
 const maxCodexClientModelsSize = 8 << 20
 
+// codexClientModelsURLs serves the catalog committed to this fork's main branch, so a catalog
+// change reaches running proxies only through a reviewed PR.
 var codexClientModelsURLs = []string{
-	"https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/codex_client_models.json",
-	"https://models.router-for.me/codex_client_models.json",
+	"https://raw.githubusercontent.com/StivenKN/CLIProxyAPI/main/internal/registry/models/codex_client_models.json",
 }
 
 // StartCodexClientModelsUpdater starts a background updater that fetches the
