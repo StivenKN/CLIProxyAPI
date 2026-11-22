@@ -2108,24 +2108,7 @@ func warnLogHomeCredentialFailure(ctx context.Context, operation, provider strin
 	if statusCode := statusCodeFromError(err); statusCode != 0 {
 		fields["status"] = statusCode
 	}
-	logEntryWithRequestID(ctx).WithFields(fields).Warnf("Home credential operation failed: err=%s", safeErrorDiagnosticForLog(err))
-}
-
-func safeErrorDiagnosticForLog(err error) string {
-	if err == nil {
-		return ""
-	}
-	diagnostic := err.Error()
-	type logDiagnosticError interface {
-		LogDiagnostic() string
-	}
-	var diagnosticErr logDiagnosticError
-	if errors.As(err, &diagnosticErr) && diagnosticErr != nil {
-		if markedDiagnostic := strings.TrimSpace(diagnosticErr.LogDiagnostic()); markedDiagnostic != "" {
-			diagnostic = markedDiagnostic
-		}
-	}
-	return logging.SafeDiagnosticForLog(diagnostic)
+	logEntryWithRequestID(ctx).WithFields(fields).Warnf("Home credential operation failed: err=%s", logging.SafeErrorForLog(err))
 }
 
 func warnLogUpstreamFailure(ctx context.Context, entry *log.Entry, provider, model string, auth *Auth, duration time.Duration, err error) {
@@ -2149,7 +2132,7 @@ func warnLogUpstreamFailure(ctx context.Context, entry *log.Entry, provider, mod
 		}
 	}
 	authIdent := formatAuthIdentity(auth, provider)
-	errSummary := safeErrorDiagnosticForLog(err)
+	errSummary := logging.SafeErrorForLog(err)
 	duration = duration.Round(time.Millisecond)
 	if statusCode := statusCodeFromError(err); statusCode != 0 {
 		entry.Warnf("%3d | %13v | upstream execution failed: provider=%s model=%s auth=%s err=%s", statusCode, duration, provider, model, authIdent, errSummary)

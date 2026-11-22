@@ -322,3 +322,15 @@ func TestClaudeCooldownMessagesRoute_PassthroughUnifiedRateLimitHeaders(t *testi
 		}
 	}
 }
+
+// The Claude error writer records the error for the access log line too.
+func TestClaudeWriteErrorResponseRecordsReasonForAccessLog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	handler := NewClaudeCodeAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil))
+	handler.WriteErrorResponse(c, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: errors.New("unknown provider for model x")})
+	if got := c.Errors.ByType(gin.ErrorTypePrivate).Last(); got == nil || got.Error() != "unknown provider for model x" {
+		t.Fatalf("gin errors = %v", c.Errors)
+	}
+}

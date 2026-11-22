@@ -805,12 +805,11 @@ func equalCanonicalSets(a []string, b []string) bool {
 	return len(setA) == len(a)
 }
 
-// escapeCodexSjsonKey escapes dots, colons, and backslashes in property keys so that sjson treats
-// keys containing dots (e.g. "my.field") or colons (e.g. ":action") as a single literal key rather
-// than nested paths or control syntax.
+// codexSjsonKeyReplacer escapes backslashes, path syntax (. * ? | # @ [ {) and colons in property
+// keys so that a key such as "my.field", "a|b" or ":action" is one literal key rather than nested
+// paths or control syntax.
+var codexSjsonKeyReplacer = strings.NewReplacer(`\`, `\\`, `.`, `\.`, `*`, `\*`, `?`, `\?`, `|`, `\|`, `#`, `\#`, `@`, `\@`, `[`, `\[`, `{`, `\{`, `:`, `\:`)
+
 func escapeCodexSjsonKey(key string) string {
-	key = strings.ReplaceAll(key, `\`, `\\`)
-	key = strings.ReplaceAll(key, `.`, `\.`)
-	key = strings.ReplaceAll(key, `:`, `\:`)
-	return key
+	return codexSjsonKeyReplacer.Replace(key)
 }

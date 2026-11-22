@@ -2,6 +2,8 @@ package toolschema
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/MoeForge/moego/ojson"
@@ -407,5 +409,22 @@ func TestNormalizeCodexToolSchemasDocCrossMethod(t *testing.T) {
 	fieldProp := ojson.GetBytesNoCopy(got, "tools.0.parameters.properties.field")
 	if fieldProp.Get("pattern").Exists() {
 		t.Fatalf("expected field.pattern to be removed: %s", fieldProp.Raw)
+	}
+}
+
+// Property names with path syntax ("a|b", "a#b", "@keys") must still be
+// normalized; an unescaped "|" or "#" pointed the rewrite at the wrong path.
+func TestNormalizeCodexToolSchemasPathSyntaxPropertyNames(t *testing.T) {
+	branches := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		branches = append(branches, `{"const":"v`+strconv.Itoa(i)+`"}`)
+	}
+	union := `{"anyOf":[` + strings.Join(branches, ",") + `]}`
+	for _, key := range []string{"ab", "a|b", "a#b", "@keys", ":x", "[x]", "{x}"} {
+		body := []byte(`{"tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"` + key + `":` + union + `}}}]}`)
+		prop := ojson.GetBytes(NormalizeCodexToolSchemas(body), "tools.0.parameters.properties").Map()[key]
+		if !prop.Get("enum").IsArray() || prop.Get("anyOf").Exists() {
+			t.Errorf("key %q: union not rewritten to enum: %s", key, prop.Raw)
+		}
 	}
 }
