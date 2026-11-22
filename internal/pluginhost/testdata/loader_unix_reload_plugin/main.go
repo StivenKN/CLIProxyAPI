@@ -41,42 +41,7 @@ extern void cliproxyPluginShutdown(void);
 #define PLUGIN_VERSION 1
 #endif
 
-#if PLUGIN_VERSION == 4
-#include <signal.h>
-__attribute__((constructor)) static void cliproxyTestSigillOnDlopen(void) {
-	raise(SIGILL);
-}
-#elif PLUGIN_VERSION == 5
-#include <unistd.h>
-__attribute__((constructor)) static void cliproxyTestPrematureExitZeroOnDlopen(void) {
-	_exit(0);
-}
-#elif PLUGIN_VERSION == 6
-#include <signal.h>
-__attribute__((constructor)) static void cliproxyTestSigkillOnDlopen(void) {
-	raise(SIGKILL);
-}
-#elif PLUGIN_VERSION == 7
-#include <stdio.h>
-#include <unistd.h>
-__attribute__((constructor)) static void cliproxyTestInheritedStdioGrandchildOnDlopen(void) {
-	pid_t pid = fork();
-	if (pid == 0) {
-		pause();
-		_exit(0);
-	}
-	if (pid > 0) {
-		const char* pid_path = getenv("CLIPROXY_TEST_GRANDCHILD_PID_FILE");
-		if (pid_path != NULL && pid_path[0] != '\0') {
-			FILE* fp = fopen(pid_path, "w");
-			if (fp != NULL) {
-				fprintf(fp, "%d\n", (int)pid);
-				fclose(fp);
-			}
-		}
-	}
-}
-#endif
+// Load-time constructors for versions 4-7 are in constructors.c.
 
 static const char* cliproxyTestMarker(void) {
 #if PLUGIN_VERSION == 2
