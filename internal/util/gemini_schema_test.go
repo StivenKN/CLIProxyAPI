@@ -4647,7 +4647,7 @@ func TestIssue7149_CleanJSONSchemaForGeminiJSONSchemaNormalizesNumericConstraint
 	}
 }
 
-// Property names with path syntax ("a|b", `a\b`, "a#b", "@keys", ":x", "[x]") must be
+// Property names with path syntax ("a|b", `a\b`, "a#b", "@keys", ":x", "[x]", "{x}") must be
 // cleaned like plain names; unescaped, the cleaner rewrote the wrong path and
 // sent the type array, format and minLength upstream unchanged.
 func TestCleanJSONSchemaForGemini_PathSyntaxPropertyNames(t *testing.T) {
