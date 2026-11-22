@@ -131,9 +131,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Refresh models catalog
-        shell: bash
-        run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         shell: bash
         run: git fetch --force --tags
@@ -258,9 +255,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Refresh models catalog
-        shell: bash
-        run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         shell: bash
         run: git fetch --force --tags
@@ -390,9 +384,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Refresh models catalog
-        shell: bash
-        run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         shell: bash
         run: git fetch --force --tags
@@ -518,8 +509,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Refresh models catalog
-        run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         run: git fetch --force --tags
       - uses: actions/cache@v4
