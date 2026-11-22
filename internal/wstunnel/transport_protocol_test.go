@@ -48,9 +48,9 @@ func TestPeerControl_ProtocolErrorInterruptsActiveWriteImmediately(t *testing.T)
 			srv.Start()
 			t.Cleanup(srv.Close)
 			t.Cleanup(hub.Close)
-			observer := dialRole(t, srv.URL, "key", RoleClient, "observer", "Observer")
+			observer := dialRole(t, hub, srv.URL, "key", RoleClient, "observer", "Observer")
 			_ = readTextJSONFrame(t, observer)
-			stalled := dialRole(t, srv.URL, "key", RoleServer, "server", "Server")
+			stalled := dialRole(t, hub, srv.URL, "key", RoleServer, "server", "Server")
 			_ = readTextJSONFrame(t, observer)
 			p := lookupTunnelPeer(t, hub, "key", "server")
 			guard := p.conn.UnderlyingConn().(*deadlineGuardConn)
@@ -86,7 +86,7 @@ func TestPeerControl_ProtocolErrorInterruptsActiveWriteImmediately(t *testing.T)
 			if offline.Get("type").String() != ControlTypeServerOffline || offline.Get("server.uuid").String() != "server" {
 				t.Fatalf("unexpected server_offline: %s", offline.Raw)
 			}
-			replacement := dialRole(t, srv.URL, "key", RoleServer, "server", "Replacement")
+			replacement := dialRole(t, hub, srv.URL, "key", RoleServer, "server", "Replacement")
 			if errWrite := replacement.WriteMessage(websocket.BinaryMessage, []byte{ProtocolVersion1}); errWrite != nil {
 				t.Fatalf("replacement write: %v", errWrite)
 			}
