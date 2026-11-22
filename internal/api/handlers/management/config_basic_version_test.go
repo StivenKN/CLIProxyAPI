@@ -54,7 +54,6 @@ func TestSetLatestReleaseRequestHeaders(t *testing.T) {
 // The version check reports this fork's releases, not upstream's.
 func TestGetLatestVersionQueriesThisFork(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	t.Setenv("GITHUB_TOKEN", "")
 	var requested string
 	previous := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
