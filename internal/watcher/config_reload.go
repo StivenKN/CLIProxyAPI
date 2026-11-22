@@ -105,12 +105,17 @@ func (w *Watcher) reloadConfig() bool {
 		log.Errorf("failed to reload config: %v", errLoadConfig)
 		return false
 	}
-	// os.WriteFile truncates before writing, so the load can read an empty file even
-	// when the change check did not. Applying it would reset the whole config to
-	// defaults (dropping API keys and the management secret); the write that follows
-	// triggers another reload.
+	// In-place saves (O_TRUNC) truncate, then write, so the load can read an empty
+	// or partly written file even when the change check did not. Applying it would
+	// reset settings to defaults (dropping API keys and the management secret).
+	// Apply only bytes that are still on disk after the load; the write that
+	// finishes the save triggers another reload.
 	if newConfig.SourceHash == emptyConfigSourceHash {
-		log.Debugf("ignoring config reload that read an empty file")
+		log.Infof("ignoring config reload that read an empty file")
+		return false
+	}
+	if onDisk, errReread := os.ReadFile(w.configPath); errReread != nil || config.ComputeSourceHash(onDisk) != newConfig.SourceHash {
+		log.Infof("ignoring config reload: the file changed while it was being read")
 		return false
 	}
 

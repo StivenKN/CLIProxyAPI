@@ -221,3 +221,43 @@ func TestReloadConfigIfChangedIgnoresFileTruncatedBeforeLoad(t *testing.T) {
 		t.Fatalf("applied request-retry values = %v, want %v", applied, want)
 	}
 }
+
+func TestReloadConfigIfChangedIgnoresFileChangedDuringLoad(t *testing.T) {
+	configPath, authDir := newIssue6631ConfigFile(t)
+	if errWrite := writeIssue6631Config(configPath, authDir, 1); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+
+	originalLoad := loadConfigFileFunc
+	t.Cleanup(func() { loadConfigFileFunc = originalLoad })
+	var errWriteDuringLoad error
+	loads := 0
+	loadConfigFileFunc = func(path string) (*config.Config, error) {
+		loads++
+		cfg, errLoad := originalLoad(path)
+		if loads == 1 {
+			// The load read bytes a save is still replacing, e.g. a partly written
+			// file; what ends up on disk differs from what was parsed.
+			errWriteDuringLoad = writeIssue6631Config(configPath, authDir, 3)
+		}
+		return cfg, errLoad
+	}
+
+	var applied []int
+	w := &Watcher{
+		configPath:     configPath,
+		authDir:        authDir,
+		reloadCallback: func(cfg *config.Config) { applied = append(applied, cfg.RequestRetry) },
+	}
+
+	w.ReloadConfigIfChanged()
+	if errWriteDuringLoad != nil {
+		t.Fatal(errWriteDuringLoad)
+	}
+	// The finishing write's event reloads the final content.
+	w.ReloadConfigIfChanged()
+
+	if want := []int{3}; !reflect.DeepEqual(applied, want) {
+		t.Fatalf("applied request-retry values = %v, want %v", applied, want)
+	}
+}
