@@ -275,3 +275,45 @@ func TestGinLogrusLoggerHealthProbeStatus(t *testing.T) {
 		})
 	}
 }
+
+// A handler's gin error is appended to the access log line, on one line and
+// with credentials redacted, so local rejections say why they failed.
+func TestGinLogrusLoggerAppendsErrorReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logger := log.StandardLogger()
+	previousHooks := logger.ReplaceHooks(make(log.LevelHooks))
+	previousLevel := logger.GetLevel()
+	hook := logtest.NewLocal(logger)
+	logger.SetLevel(log.InfoLevel)
+	t.Cleanup(func() { logger.ReplaceHooks(previousHooks); logger.SetLevel(previousLevel) })
+
+	engine := gin.New()
+	engine.Use(GinLogrusLogger())
+	engine.POST("/v1/messages", func(c *gin.Context) {
+		_ = c.Error(errors.New("unknown provider for model x\nAuthorization: Bearer sk-secret"))
+		c.Status(http.StatusBadRequest)
+	})
+
+	engine.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+	entries := hook.AllEntries()
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %d, want 1", len(entries))
+	}
+	message := entries[0].Message
+	if !strings.Contains(message, `| unknown provider for model x Authorization: "[REDACTED]"`) || strings.ContainsAny(message, "\r\n") || strings.Contains(message, "sk-secret") {
+		t.Fatalf("access log message = %q", message)
+	}
+}
+
+type diagnosticTestError struct{}
+
+func (diagnosticTestError) Error() string         { return "raw upstream body with private details" }
+func (diagnosticTestError) LogDiagnostic() string { return "status=401" }
+
+// Errors that offer a LogDiagnostic are logged by it, never by their raw Error().
+func TestAccessLogErrorMessagePrefersLogDiagnostic(t *testing.T) {
+	got := accessLogErrorMessage([]*gin.Error{{Err: diagnosticTestError{}, Type: gin.ErrorTypePrivate}})
+	if got != "status=401" {
+		t.Fatalf("access log error = %q, want %q", got, "status=401")
+	}
+}
