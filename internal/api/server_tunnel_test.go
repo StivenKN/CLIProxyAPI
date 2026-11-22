@@ -103,6 +103,29 @@ func readServerTunnelJSON(t *testing.T, conn *websocket.Conn) ojson.Result {
 	return ojson.ParseBytes(raw)
 }
 
+// waitServerTunnelListed reads control frames on client until serverUUID is
+// visible to it, through the initial server_list or a later server_online.
+// The hub answers the upgrade before it registers a peer, so a returned Dial
+// does not mean other peers can see or reach that server yet.
+func waitServerTunnelListed(t *testing.T, client *websocket.Conn, serverUUID string) {
+	t.Helper()
+	for {
+		frame := readServerTunnelJSON(t, client)
+		switch frame.Get("type").String() {
+		case wstunnel.ControlTypeServerList:
+			for _, server := range frame.Get("servers").Array() {
+				if server.Get("uuid").String() == serverUUID {
+					return
+				}
+			}
+		case wstunnel.ControlTypeServerOnline:
+			if frame.Get("server.uuid").String() == serverUUID {
+				return
+			}
+		}
+	}
+}
+
 func readServerTunnelBinary(t *testing.T, conn *websocket.Conn) wstunnel.DataFrameView {
 	t.Helper()
 	msgType, raw, errRead := readServerTunnelTestMessage(conn)
@@ -148,6 +171,10 @@ func TestServerWebsocketTunnel_EndToEndAndTenantIsolation(t *testing.T) {
 
 	srvA1 := dialServerTunnelWithType(t, httpSrv.URL, "tenant-a", wstunnel.RoleServer, "srv-a1", "Server A1", "cpa-desktop")
 	_ = dialServerTunnelWithType(t, httpSrv.URL, "tenant-b", wstunnel.RoleServer, "srv-b1", "Server B1", "cpa-cloud")
+	// Both servers must be registered before cliA joins, or its initial list
+	// proves neither visibility of srv-a1 nor isolation from srv-b1.
+	waitServerTunnelListed(t, dialServerTunnel(t, httpSrv.URL, "tenant-a", wstunnel.RoleClient, "watch-a", "Watcher A"), "srv-a1")
+	waitServerTunnelListed(t, dialServerTunnel(t, httpSrv.URL, "tenant-b", wstunnel.RoleClient, "watch-b", "Watcher B"), "srv-b1")
 
 	cliA := dialServerTunnel(t, httpSrv.URL, "tenant-a", wstunnel.RoleClient, "cli-a1", "Client A1")
 	initList := readServerTunnelJSON(t, cliA)
@@ -368,7 +395,7 @@ func TestServerWebsocketTunnel_HotReloadRevokesRemovedKeyOnly(t *testing.T) {
 
 	srvKeep := dialServerTunnel(t, httpSrv.URL, "key-keep", wstunnel.RoleServer, "s-keep", "Keep Server")
 	cliKeep := dialServerTunnel(t, httpSrv.URL, "key-keep", wstunnel.RoleClient, "c-keep", "Keep Client")
-	_ = readServerTunnelJSON(t, cliKeep)
+	waitServerTunnelListed(t, cliKeep, "s-keep")
 
 	cliRevoke := dialServerTunnel(t, httpSrv.URL, "key-revoke", wstunnel.RoleClient, "c-revoke", "Revoke Client")
 	_ = readServerTunnelJSON(t, cliRevoke)
