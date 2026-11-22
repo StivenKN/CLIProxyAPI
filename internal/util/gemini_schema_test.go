@@ -4646,3 +4646,18 @@ func TestIssue7149_CleanJSONSchemaForGeminiJSONSchemaNormalizesNumericConstraint
 		t.Errorf("unicode-escaped properties.Msg.maxLength = %s (type %v), want number 2; output=%s", got.Raw, got.Type, unicodeEscapedGot)
 	}
 }
+
+// Property names with path syntax ("a|b", `a\b`, "a#b", "@keys") must be
+// cleaned like plain names; unescaped, the cleaner rewrote the wrong path and
+// sent the type array, format and minLength upstream unchanged.
+func TestCleanJSONSchemaForGemini_PathSyntaxPropertyNames(t *testing.T) {
+	for _, key := range []string{"a|b", `a\\b`, "a#b", "@keys"} {
+		input := `{"type":"object","properties":{"` + key + `":{"type":["string","null"],"format":"email","minLength":2}}}`
+		got := ojson.Parse(CleanJSONSchemaForGemini(input)).Get("properties")
+		var prop ojson.Result
+		got.ForEach(func(_, value ojson.Result) bool { prop = value; return false })
+		if prop.Get("type").String() != "string" || prop.Get("format").Exists() || prop.Get("minLength").Exists() {
+			t.Errorf("key %s not cleaned: %s", key, got.Raw)
+		}
+	}
+}
