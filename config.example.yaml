@@ -11,9 +11,10 @@ config-version: 8
 
 # Optional model catalog sources: http(s) URLs or absolute local file paths.
 # Each explicit source overrides --local-model; otherwise --local-model uses
-# embedded catalogs, and normal mode uses the official remote sources.
+# embedded catalogs, and normal mode fetches the catalogs committed to the
+# StivenKN/CLIProxyAPI main branch.
 # Failed refreshes retain the last valid catalog; custom sources never fall back
-# to official URLs. Files and URLs are refreshed every 3 hours and on source changes.
+# to the default URLs. Files and URLs are refreshed every 3 hours and on source changes.
 # Home mode never loads the general catalog, even when explicitly configured.
 models:
   catalog: ""

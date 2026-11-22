@@ -7,7 +7,7 @@ import (
 )
 
 // CatalogSources overrides the source of each model catalog independently.
-// Empty values retain the process default (embedded or official remote catalogs).
+// Empty values retain the process default (embedded or the fork's remote catalogs on main).
 type CatalogSources struct {
 	Catalog      string `yaml:"catalog" json:"catalog,omitempty"`
 	CodexCatalog string `yaml:"codex-catalog" json:"codex-catalog,omitempty"`
