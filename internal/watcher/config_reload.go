@@ -20,6 +20,9 @@ import (
 
 var loadConfigFileFunc = config.LoadConfig
 
+// emptyConfigSourceHash is the SourceHash of a config parsed from an empty file.
+var emptyConfigSourceHash = config.ComputeSourceHash(nil)
+
 func (w *Watcher) stopConfigReloadTimer() {
 	w.configReloadMu.Lock()
 	if w.configReloadTimer != nil {
@@ -100,6 +103,19 @@ func (w *Watcher) reloadConfig() bool {
 	newConfig, errLoadConfig := loadConfigFileFunc(w.configPath)
 	if errLoadConfig != nil {
 		log.Errorf("failed to reload config: %v", errLoadConfig)
+		return false
+	}
+	// In-place saves (O_TRUNC) truncate, then write, so the load can read an empty
+	// or partly written file even when the change check did not. Applying it would
+	// reset settings to defaults (dropping API keys and the management secret).
+	// Apply only bytes that are still on disk after the load; the write that
+	// finishes the save triggers another reload.
+	if newConfig.SourceHash == emptyConfigSourceHash {
+		log.Infof("ignoring config reload that read an empty file")
+		return false
+	}
+	if onDisk, errReread := os.ReadFile(w.configPath); errReread != nil || config.ComputeSourceHash(onDisk) != newConfig.SourceHash {
+		log.Infof("ignoring config reload: the file changed while it was being read")
 		return false
 	}
 
