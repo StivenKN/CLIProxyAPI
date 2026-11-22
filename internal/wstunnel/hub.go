@@ -85,6 +85,7 @@ type Hub struct {
 
 	testForceClose                <-chan time.Time
 	testOnAfterReserve            func()
+	testOnPeerCommitted           func(apiKey, uuid string)
 	testOnPeerUnregistered        func(apiKey, uuid string)
 	testBeforeListServersEnqueue  func()
 	testBeforeProtocolErrorReturn func()
@@ -342,10 +343,14 @@ func (h *Hub) commitPeer(p *peer, reservation *uuidReservation) bool {
 			}
 		}
 	}
+	onCommitted := h.testOnPeerCommitted
 	h.mu.Unlock()
 
 	for _, slow := range overflowClients {
 		slow.close(websocket.ClosePolicyViolation, "control queue overflow", true)
+	}
+	if onCommitted != nil {
+		onCommitted(p.apiKey, p.uuid)
 	}
 
 	go p.writeLoop(h.pingInterval)

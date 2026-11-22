@@ -139,11 +139,11 @@ func TestPeerClose_SaturatedTransportNeverBlocksCallers(t *testing.T) {
 			t.Cleanup(reclaim)
 			hub.UpdateAllowedAPIKeys([]string{"key", "keep"})
 			srv := newGatedTunnelServer(t, hub)
-			stalled := dialRole(t, srv.URL, "key", RoleClient, "stalled", "Stalled")
+			stalled := dialRole(t, hub, srv.URL, "key", RoleClient, "stalled", "Stalled")
 			_ = readTextJSONFrame(t, stalled)
-			healthy := dialRole(t, srv.URL, "key", RoleClient, "healthy", "Healthy")
+			healthy := dialRole(t, hub, srv.URL, "key", RoleClient, "healthy", "Healthy")
 			_ = readTextJSONFrame(t, healthy)
-			keep := dialRole(t, srv.URL, "keep", RoleClient, "keep", "Keep")
+			keep := dialRole(t, hub, srv.URL, "keep", RoleClient, "keep", "Keep")
 			_ = readTextJSONFrame(t, keep)
 
 			p := lookupTunnelPeer(t, hub, "key", "stalled")
@@ -207,7 +207,7 @@ func TestPeerClose_ActiveWriteAndQueuedFramesReceivePolicyClose(t *testing.T) {
 			t.Cleanup(func() { close(forceClose) })
 			hub.UpdateAllowedAPIKeys([]string{"key"})
 			srv := newGatedTunnelServer(t, hub)
-			client := dialRole(t, srv.URL, "key", RoleClient, "client", "Client")
+			client := dialRole(t, hub, srv.URL, "key", RoleClient, "client", "Client")
 			_ = readTextJSONFrame(t, client)
 			p := lookupTunnelPeer(t, hub, "key", "client")
 			transport := p.conn.UnderlyingConn().(*deadlineGuardConn).Conn.(*gatedTunnelConn)
@@ -223,7 +223,7 @@ func TestPeerClose_ActiveWriteAndQueuedFramesReceivePolicyClose(t *testing.T) {
 				hub.UpdateAllowedAPIKeys(nil)
 			} else {
 				// A topology event cannot fit behind the active and queued frames.
-				_ = dialRole(t, srv.URL, "key", RoleServer, "server", "Server")
+				_ = dialRole(t, hub, srv.URL, "key", RoleServer, "server", "Server")
 			}
 			waitTunnelSignal(t, p.closed, "policy close request")
 			close(transport.gate)
@@ -307,8 +307,8 @@ func TestHubBudget_ExhaustedTenantDoesNotStarveAnotherTenant(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 	t.Cleanup(hub.Close)
-	serverB := dialRole(t, srv.URL, "b", RoleServer, "s", "Server")
-	clientB := dialRole(t, srv.URL, "b", RoleClient, "c", "Client")
+	serverB := dialRole(t, hub, srv.URL, "b", RoleServer, "s", "Server")
+	clientB := dialRole(t, hub, srv.URL, "b", RoleClient, "c", "Client")
 	_ = readTextJSONFrame(t, clientB)
 
 	// Paused writers make exact exhaustion independent of TCP buffer sizes.
@@ -400,7 +400,7 @@ func TestHubLimits_ControlSizeAndFragmentation(t *testing.T) {
 			srv := httptest.NewServer(hub)
 			t.Cleanup(srv.Close)
 			t.Cleanup(hub.Close)
-			client := dialRole(t, srv.URL, "key", RoleClient, "c", "Client")
+			client := dialRole(t, hub, srv.URL, "key", RoleClient, "c", "Client")
 			_ = readTextJSONFrame(t, client)
 			raw := append([]byte(`{"type":"list_servers"}`), bytes.Repeat([]byte(" "), MaxControlFrameBytes-len(`{"type":"list_servers"}`))...)
 			if oversized {
@@ -434,8 +434,8 @@ func TestHubLimits_BinaryPayloadAndTransportBoundaries(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 	t.Cleanup(hub.Close)
-	server := dialRole(t, srv.URL, "key", RoleServer, "s", "Server")
-	client := dialRole(t, srv.URL, "key", RoleClient, "c", "Client")
+	server := dialRole(t, hub, srv.URL, "key", RoleServer, "s", "Server")
+	client := dialRole(t, hub, srv.URL, "key", RoleClient, "c", "Client")
 	_ = readTextJSONFrame(t, client)
 	for _, size := range []int{MaxRawPayloadBytes, MaxRawPayloadBytes + 1, MaxInboundFrameBytes - 6, MaxInboundFrameBytes - 5} {
 		raw := append([]byte{ProtocolVersion1, PayloadTypeBinary, 1, 1, 'c', 's'}, make([]byte, size)...)
@@ -508,7 +508,7 @@ func TestHubControl_UnknownTypeErrorDoesNotEchoInput(t *testing.T) {
 	srv := httptest.NewServer(hub)
 	t.Cleanup(srv.Close)
 	t.Cleanup(hub.Close)
-	client := dialRole(t, srv.URL, "key", RoleClient, "c", "Client")
+	client := dialRole(t, hub, srv.URL, "key", RoleClient, "c", "Client")
 	_ = readTextJSONFrame(t, client)
 	doc := ojson.NewDocString("{}")
 	if errSet := doc.Set("type", strings.Repeat("x", MaxControlTypeLen)); errSet != nil {
