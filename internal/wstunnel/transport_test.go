@@ -107,7 +107,7 @@ func TestPeerControl_OversizedMessagesUseWriterCloseWithoutFiniteDeadlines(t *te
 			hub := NewHub(Options{PingInterval: time.Hour})
 			hub.UpdateAllowedAPIKeys([]string{"key"})
 			srv := newDeadlineTrackingTunnelServer(t, hub)
-			client := dialRole(t, srv.URL, "key", RoleClient, "device", "Device")
+			client := dialRole(t, hub, srv.URL, "key", RoleClient, "device", "Device")
 			_ = readTextJSONFrame(t, client)
 			p := lookupTunnelPeer(t, hub, "key", "device")
 			transport := p.conn.UnderlyingConn().(*deadlineGuardConn).Conn.(*deadlineTrackingTunnelConn)
@@ -161,9 +161,9 @@ func TestPeerControl_ProtocolErrorReclaimsSaturatedTransport(t *testing.T) {
 			t.Cleanup(hub.Close)
 			t.Cleanup(reclaim)
 
-			observer := dialRole(t, srv.URL, "key", RoleClient, "observer", "Observer")
+			observer := dialRole(t, hub, srv.URL, "key", RoleClient, "observer", "Observer")
 			_ = readTextJSONFrame(t, observer)
-			stalled := dialRole(t, srv.URL, "key", RoleServer, "server", "Server")
+			stalled := dialRole(t, hub, srv.URL, "key", RoleServer, "server", "Server")
 			_ = readTextJSONFrame(t, observer)
 			p := lookupTunnelPeer(t, hub, "key", "server")
 			transport := p.conn.UnderlyingConn().(*deadlineGuardConn).Conn.(*deadlineTrackingTunnelConn)
@@ -186,7 +186,7 @@ func TestPeerControl_ProtocolErrorReclaimsSaturatedTransport(t *testing.T) {
 			default:
 			}
 			// The old socket is still blocked, but its UUID must already be reusable.
-			replacement := dialRole(t, srv.URL, "key", RoleServer, "server", "Replacement")
+			replacement := dialRole(t, hub, srv.URL, "key", RoleServer, "server", "Replacement")
 			online := readTextJSONFrame(t, observer)
 			if online.Get("type").String() != ControlTypeServerOnline || online.Get("server.name").String() != "Replacement" {
 				t.Fatalf("unexpected replacement server_online: %s", online.Raw)
@@ -227,9 +227,10 @@ func TestPeerControl_MalformedCloseNeverSetsFiniteDeadlines(t *testing.T) {
 			hub := NewHub(Options{PingInterval: time.Hour})
 			hub.UpdateAllowedAPIKeys([]string{"key"})
 			srv := newDeadlineTrackingTunnelServer(t, hub)
-			client := dialRole(t, srv.URL, "key", RoleClient, "device", "Device")
+			client := dialRole(t, hub, srv.URL, "key", RoleClient, "device", "Device")
 			_ = readTextJSONFrame(t, client)
 			p := lookupTunnelPeer(t, hub, "key", "device")
+			waitTunnelWriterIdle(p)
 			transport := p.conn.UnderlyingConn().(*deadlineGuardConn).Conn.(*deadlineTrackingTunnelConn)
 			transport.monitoring.Store(true)
 			// A zero mask preserves the malformed payload without mutating any slices.
