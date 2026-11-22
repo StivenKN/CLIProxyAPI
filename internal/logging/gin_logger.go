@@ -182,11 +182,11 @@ func creditsUsed(c *gin.Context) bool {
 }
 
 // accessLogErrorMessage joins the request's errors for the access log line,
-// on one line, bounded, and with credentials redacted.
+// each one log-safe (see SafeErrorForLog).
 func accessLogErrorMessage(errs []*gin.Error) string {
 	parts := make([]string, 0, len(errs))
 	for _, e := range errs {
-		parts = append(parts, e.Error())
+		parts = append(parts, SafeErrorForLog(e))
 	}
-	return SafeDiagnosticForLog(strings.Join(parts, "; "))
+	return strings.Join(parts, "; ")
 }

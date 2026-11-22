@@ -304,3 +304,16 @@ func TestGinLogrusLoggerAppendsErrorReason(t *testing.T) {
 		t.Fatalf("access log message = %q", message)
 	}
 }
+
+type diagnosticTestError struct{}
+
+func (diagnosticTestError) Error() string         { return "raw upstream body with private details" }
+func (diagnosticTestError) LogDiagnostic() string { return "status=401" }
+
+// Errors that offer a LogDiagnostic are logged by it, never by their raw Error().
+func TestAccessLogErrorMessagePrefersLogDiagnostic(t *testing.T) {
+	got := accessLogErrorMessage([]*gin.Error{{Err: diagnosticTestError{}, Type: gin.ErrorTypePrivate}})
+	if got != "status=401" {
+		t.Fatalf("access log error = %q, want %q", got, "status=401")
+	}
+}
