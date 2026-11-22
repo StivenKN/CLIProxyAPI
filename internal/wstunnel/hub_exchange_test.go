@@ -456,48 +456,33 @@ func TestHubExchange_SecurityGuardsAndBackpressureIsolation(t *testing.T) {
 	}
 
 	// 3. Slow peer backpressure: flood srvSlow (without reading from it) until target_buffer_full arrives.
-	gotBufferFull := make(chan struct{})
-	syncDone := make(chan error, 1)
-	go func() {
-		var once sync.Once
-		for {
-			frame := readTextJSONFrame(t, cli1)
-			if frame.Get("type").String() == ControlTypeError && frame.Get("code").String() == ErrCodeTargetBufferFull {
-				once.Do(func() { close(gotBufferFull) })
-				continue
-			}
-			if frame.Get("type").String() == ControlTypeServerList && frame.Get("request_id").String() == "post-flood-barrier" {
-				syncDone <- nil
-				return
-			}
-		}
-	}()
-
+	// Each flood frame is followed by a list_servers barrier, and the next frame waits for that reply.
+	// cli1's two-slot queue then never holds more than one error plus one reply; a free-running flood
+	// can fill it with errors so the barrier reply overflows and the hub disconnects cli1.
 	largeChunk := bytes.Repeat([]byte("z"), 256*1024)
-	floodDone := false
-	for i := 0; i < 128 && !floodDone; i++ {
+	gotBufferFull := false
+	for i := 0; i < 128 && !gotBufferFull; i++ {
 		pkt, _ := EncodeDataFrame(PayloadTypeBinary, "cli-1", "srv-slow", largeChunk)
 		if errWrite := cli1.WriteMessage(websocket.BinaryMessage, pkt); errWrite != nil {
 			t.Fatalf("WriteMessage(flood %d) error = %v", i, errWrite)
 		}
-		select {
-		case <-gotBufferFull:
-			floodDone = true
-		default:
+		barrierID := fmt.Sprintf("flood-%d", i)
+		if errWrite := cli1.WriteMessage(websocket.TextMessage, []byte(`{"type":"list_servers","request_id":"`+barrierID+`"}`)); errWrite != nil {
+			t.Fatalf("WriteMessage(barrier %d) error = %v", i, errWrite)
+		}
+		for {
+			frame := readTextJSONFrame(t, cli1)
+			if frame.Get("type").String() == ControlTypeError && frame.Get("code").String() == ErrCodeTargetBufferFull {
+				gotBufferFull = true
+				continue
+			}
+			if frame.Get("type").String() == ControlTypeServerList && frame.Get("request_id").String() == barrierID {
+				break
+			}
 		}
 	}
-	select {
-	case <-gotBufferFull:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for target_buffer_full from slow server")
-	}
-
-	// Barrier sync via list_servers to deterministically drain all in-flight error frames on cli1.
-	if errWrite := cli1.WriteMessage(websocket.TextMessage, []byte(`{"type":"list_servers","request_id":"post-flood-barrier"}`)); errWrite != nil {
-		t.Fatalf("WriteMessage(barrier) error = %v", errWrite)
-	}
-	if errSync := <-syncDone; errSync != nil {
-		t.Fatalf("barrier sync error = %v", errSync)
+	if !gotBufferFull {
+		t.Fatal("slow server never reported target_buffer_full")
 	}
 
 	// Verify srvFast still exchanges traffic with cli1 without being blocked by srvSlow.
